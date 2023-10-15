@@ -209,7 +209,6 @@ class Runtime:
             "indent": indent,
             "join": join,
             "repr": repr,
-            "indentprefix": "    ",
         }
 
     def bind(self, name, value):

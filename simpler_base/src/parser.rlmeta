@@ -38,14 +38,11 @@ Parser {
   hostExpr =
     | space string:x                          -> ["String" x]
     | space '[' hostListItem*:xs space ']'    -> ["List" ~xs]
-    | space '{' formatExpr*:xs space '}'      -> ["Format" ~xs]
+    | space '{' hostExpr*:xs space '}'        -> ["Format" ~xs]
     | var:x space '(' hostExpr*:ys space ')'  -> ["Call" x ~ys]
     | var
   hostListItem =
     | space '~'*:ys hostExpr:x                -> ["ListItem" len(ys) x]
-  formatExpr =
-    | space '>' formatExpr*:xs space '<'      -> ["Indent" ["Format" ~xs]]
-    | hostExpr
   var =
     | name:x !(space '=')                     -> ["Lookup" x]
   string    = '"'  (!'"'  innerChar)*:xs '"'  -> { xs }

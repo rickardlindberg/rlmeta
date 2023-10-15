@@ -21,11 +21,9 @@ CodeGenerator {
   List          = astList:x       -> { "concat([" x "])" }
   ListItem      = .:x ast:y       -> { "splice(" repr(x) ", " y ")" }
   Format        = astList:x       -> { "join([" x "])" }
-  Indent        = ast:x           -> { "indent(" x ", "
-                                       "self.lookup('indentprefix'))" }
   Call          = ast:x astList:y -> { x "(" y ")" }
   Lookup        = .:x             -> { "self.lookup(" repr(x) ")" }
-  astList       = ast*:xs         -> { "\n" > join(xs ",\n") < }
+  astList       = ast*:xs         -> { "\n" indent(join(xs ",\n")) }
   asts          = ast*:xs !.      -> { xs }
   ast           = [%:x]
 }
