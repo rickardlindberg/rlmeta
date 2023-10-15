@@ -105,7 +105,7 @@ class RuntimeAction:
         self.runtime = runtime
         return self.fn(self)
     def bind(self, name, value, continuation):
-        self.runtime.bind(name, value)
+        self.runtime = self.runtime.bind(name, value)
         return continuation()
     def lookup(self, name):
         if name in self.scope:
@@ -205,7 +205,9 @@ class Runtime:
         }
 
     def bind(self, name, value):
-        self.vars[name] = value
+        r = Runtime()
+        r.vars = dict(self.vars, **{name: value})
+        return r
 
     def lookup(self, name):
         return self.vars[name]
