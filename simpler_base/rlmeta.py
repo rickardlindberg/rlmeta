@@ -703,18 +703,20 @@ rules['CodeGenerator.Not'] = Or([
             'Not(',
             self.lookup('x'),
             ')']))]))])
-rules['CodeGenerator.MatchList'] = Or([
-    Scope(And([
-        Bind('x', MatchRule('CodeGenerator.ast')),
-        Action(lambda self: join([
-            'MatchList(',
-            self.lookup('x'),
-            ')']))]))])
 rules['CodeGenerator.MatchCallRule'] = Or([
     Scope(And([
         Action(lambda self: join([
             "MatchCallRule('",
             self.lookup('namespace'),
+            "')"]))]))])
+rules['CodeGenerator.MatchRule'] = Or([
+    Scope(And([
+        Bind('x', MatchObject(lambda x: True, 'True')),
+        Action(lambda self: join([
+            "MatchRule('",
+            self.lookup('namespace'),
+            '.',
+            self.lookup('x'),
             "')"]))]))])
 rules['CodeGenerator.MatchObject'] = Or([
     Scope(And([
@@ -726,15 +728,17 @@ rules['CodeGenerator.MatchObject'] = Or([
             self.lookup('repr')(
                 self.lookup('x')),
             ')']))]))])
-rules['CodeGenerator.MatchRule'] = Or([
+rules['CodeGenerator.MatchList'] = Or([
     Scope(And([
-        Bind('x', MatchObject(lambda x: True, 'True')),
+        Bind('x', MatchRule('CodeGenerator.ast')),
         Action(lambda self: join([
-            "MatchRule('",
-            self.lookup('namespace'),
-            '.',
+            'MatchList(',
             self.lookup('x'),
-            "')"]))]))])
+            ')']))]))])
+rules['CodeGenerator.Any'] = Or([
+    Scope(And([
+        Action(lambda self: join([
+            'True']))]))])
 rules['CodeGenerator.Eq'] = Or([
     Scope(And([
         Bind('x', MatchObject(lambda x: True, 'True')),
@@ -742,10 +746,6 @@ rules['CodeGenerator.Eq'] = Or([
             'x == ',
             self.lookup('repr')(
                 self.lookup('x'))]))]))])
-rules['CodeGenerator.Any'] = Or([
-    Scope(And([
-        Action(lambda self: join([
-            'True']))]))])
 rules['CodeGenerator.Range'] = Or([
     Scope(And([
         Bind('x', MatchObject(lambda x: True, 'True')),

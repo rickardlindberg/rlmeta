@@ -8,12 +8,12 @@ CodeGenerator {
   Bind          = .:x ast:y       -> { "Bind(" repr(x) ", " y ")" }
   Star          = ast:x           -> { "Star(" x ")" }
   Not           = ast:x           -> { "Not(" x ")" }
-  MatchList     = ast:x           -> { "MatchList(" x ")" }
   MatchCallRule =                 -> { "MatchCallRule('" namespace "')" }
-  MatchObject   = ast:x           -> { "MatchObject(lambda x: " x ", " repr(x) ")" }
   MatchRule     = .:x             -> { "MatchRule('" namespace "." x "')" }
-  Eq            = .:x             -> { "x == " repr(x) }
+  MatchObject   = ast:x           -> { "MatchObject(lambda x: " x ", " repr(x) ")" }
+  MatchList     = ast:x           -> { "MatchList(" x ")" }
   Any           =                 -> { "True" }
+  Eq            = .:x             -> { "x == " repr(x) }
   Range         = .:x .:y         -> { repr(x) " <= x <= " repr(y) }
   Action        = ast:x           -> {"Action(lambda self: " x ")"}
   Set           = .:x ast:y ast:z -> { "self.bind(" repr(x) ", " y ", lambda: " z ")" }
