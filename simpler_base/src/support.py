@@ -193,13 +193,6 @@ class MatchError(Exception):
         Exception.__init__(self, name)
         self.items = items
         self.index = index
-        self.stream = items
-        self.pos = index
-        self.message = str(self)
-    def report(self):
-        print(self.items[:self.index] + "<ERR>" + self.items[self.index:])
-        print()
-        print("ERROR: " + str(self))
 
 class Runtime:
 
@@ -231,13 +224,13 @@ def compile_chain(grammars, source):
             marker = "<ERROR POSITION>"
             if os.isatty(sys.stderr.fileno()):
                 marker = f"\033[0;31m{marker}\033[0m"
-            if isinstance(e.stream, str):
-                stream_string = e.stream[:e.pos] + marker + e.stream[e.pos:]
+            if isinstance(e.items, str):
+                stream_string = e.items[:e.index] + marker + e.items[e.index:]
             else:
-                stream_string = pprint.pformat(e.stream)
+                stream_string = pprint.pformat(e.items)
             sys.exit("ERROR: {}\nPOSITION: {}\nSTREAM:\n{}".format(
-                e.message,
-                e.pos,
+                str(e),
+                e.index,
                 indent(stream_string)
             ))
     return source
