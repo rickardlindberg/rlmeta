@@ -206,7 +206,6 @@ class Runtime:
     def __init__(self):
         self.vars = {
             "len": len,
-            "label": Counter,
             "indent": indent,
             "join": join,
             "repr": repr,
@@ -221,16 +220,6 @@ class Runtime:
 
 def indent(text, prefix="    "):
     return "".join(prefix+line for line in text.splitlines(True))
-
-class Counter(object):
-
-    def __init__(self):
-        self.value = 0
-
-    def __call__(self):
-        result = self.value
-        self.value += 1
-        return result
 
 def compile_chain(grammars, source):
     import os
