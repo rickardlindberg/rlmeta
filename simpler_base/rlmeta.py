@@ -525,7 +525,7 @@ rules['Parser.hostExpr'] = Or([
             splice(0, self.lookup('x')),
             splice(1, self.lookup('ys'))]))])),
     Scope(And([
-        Bind('x', MatchRule('Parser.var'))]))])
+        MatchRule('Parser.var')]))])
 rules['Parser.hostListItem'] = Or([
     Scope(And([
         MatchRule('Parser.space'),
