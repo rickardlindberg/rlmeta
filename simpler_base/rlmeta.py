@@ -480,8 +480,7 @@ rules['Parser.actionExpr'] = Or([
         And([
             MatchObject(lambda x: x == '-', "x == '-'"),
             MatchObject(lambda x: x == '>', "x == '>'")]),
-        Bind('x', MatchRule('Parser.hostExpr')),
-        Action(lambda self: self.lookup('x'))]))])
+        MatchRule('Parser.hostExpr')]))])
 rules['Parser.hostExpr'] = Or([
     Scope(And([
         MatchRule('Parser.space'),
