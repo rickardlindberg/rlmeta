@@ -1,29 +1,41 @@
 CodeGenerator {
-  Namespace     = .:x ast*:ys     -> x:namespace
-                                  -> { ys }
-  Rule          = .:x ast:y       -> { "rules['" namespace "." x "'] = " y "\n" }
-  Or            = astList:x       -> { "Or([" x "])" }
-  Scope         = ast:x           -> { "Scope(" x ")" }
-  And           = astList:x       -> { "And([" x "])" }
-  Bind          = .:x ast:y       -> { "Bind(" repr(x) ", " y ")" }
-  Star          = ast:x           -> { "Star(" x ")" }
-  Not           = ast:x           -> { "Not(" x ")" }
-  MatchCallRule =                 -> { "MatchCallRule('" namespace "')" }
-  MatchRule     = .:x             -> { "MatchRule('" namespace "." x "')" }
-  MatchObject   = ast:x           -> { "MatchObject(lambda x: " x ", " repr(x) ")" }
-  MatchList     = ast:x           -> { "MatchList(" x ")" }
-  Any           =                 -> { "True" }
-  Eq            = .:x             -> { "x == " repr(x) }
-  Range         = .:x .:y         -> { repr(x) " <= x <= " repr(y) }
-  Action        = ast:x           -> {"Action(lambda self: " x ")"}
-  Set           = .:x ast:y ast:z -> { "self.bind(" repr(x) ", " y ", lambda: " z ")" }
-  String        = .:x             -> repr(x)
-  List          = astList:x       -> { "concat([" x "])" }
-  ListItem      = .:x ast:y       -> { "splice(" repr(x) ", " y ")" }
-  Format        = astList:x       -> { "join([" x "])" }
-  Call          = ast:x astList:y -> { x "(" y ")" }
-  Lookup        = .:x             -> { "self.lookup(" repr(x) ")" }
-  astList       = ast*:xs         -> { "\n" indent(join(xs ",\n")) }
-  asts          = ast*:xs !.      -> { xs }
+  asts          = ast*:xs !.             -> { xs                                         }
   ast           = [%:x]
+  Namespace     = .:x ast*:ys            -> x:namespace                                         ->
+                                            []:ids                                              ->
+                                            []:matchers                                         ->
+                                            { matchers ys }
+  Rule          = .:x ast:y              -> { "rules['" namespace "." x "'] = " y "\n"   }
+  Or            = matcher:m astList:x    -> { "operator_or(stream, [" x "])"             }:body -> m
+  Scope         = matcher:m ast:x        -> { "stream.with_scope(" x ")"                 }:body -> m
+  And           = matcher:m astList:x    -> { "operator_and(stream, [" x "])"            }:body -> m
+  Bind          = matcher:m repr:x ast:y -> { "stream.bind(" x ", " y ".run(stream))"    }:body -> m
+  Star          = matcher:m ast:x        -> { "operator_star(stream, " x ")"             }:body -> m
+  Not           = matcher:m ast:x        -> { "operator_not(stream, " x ")"              }:body -> m
+  MatchCallRule = matcher:m              -> { "stream.match_call_rule('" namespace "')"  }:body -> m
+  MatchRule     = matcher:m .:x          -> { "rules['" namespace "." x "'].run(stream)" }:body -> m
+  MatchObject   = matcher:m ast:x        -> { "stream.match(lambda item: " x ")"         }:body -> m
+  MatchList     = matcher:m ast:x        -> { "stream.match_list(" x ")"                 }:body -> m
+  Action        = matcher:m ast:x        -> { "stream.action(lambda self: " x ")"        }:body -> m
+  Any           =                        -> { "True, 'any'"                              }
+  Eq            = repr:x                 -> { "item == " x ", " repr(x)                  }
+  Range         = repr:x repr:y          -> { x " <= item <= " y ", 'range'"             }
+  Set           = repr:x ast:y ast:z     -> { "self.bind(" x ", " y ", lambda: " z ")"   }
+  String        = repr
+  List          = astList:x              -> { "concat([" x "])"                          }
+  ListItem      = repr:x ast:y           -> { "splice(" x ", " y ")"                     }
+  Format        = astList:x              -> { "join([" x "])"                            }
+  Call          = ast:x astList:y        -> { x "(" y ")"                                }
+  Lookup        = repr:x                 -> { "self.lookup(" x ")"                       }
+  astList       = ast*:xs                -> { "\n" indent(join(xs ",\n")) "\n"           }
+  matcher       =                        -> { "Matcher_" namespace "_" len(ids)          }:id ->
+                                            append(ids id)                                    ->
+                                            append(matchers { "class " id ":\n" indent({
+                                                "def run(self, stream):\n" indent({
+                                                  "return " body "\n"
+                                                })
+                                              })
+                                            })                                                ->
+                                            { id "()" }
+  repr          = .:x                    -> repr(x)
 }

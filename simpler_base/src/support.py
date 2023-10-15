@@ -1,101 +1,38 @@
-import contextlib
-import sys
+def operator_or(stream, matchers):
+    for matcher in matchers:
+        state = stream.save()
+        try:
+            return matcher.run(stream)
+        except MatchError:
+            stream.restore(state)
+    stream.error("no or match")
 
-class Or:
-    def __init__(self, matchers):
-        self.matchers = matchers
-    def run(self, stream):
-        for matcher in self.matchers:
-            state = stream.save()
-            try:
-                return matcher.run(stream)
-            except MatchError:
-                stream.restore(state)
-        stream.error("no or match")
+def operator_and(stream, matchers):
+    result = stream.action(lambda self: None)
+    for matcher in matchers:
+        result = matcher.run(stream)
+    return result
 
-class Scope:
-    def __init__(self, matcher):
-        self.matcher = matcher
-    def run(self, stream):
-        stream.push_scope()
-        result = self.matcher.run(stream)
-        stream.pop_scope()
-        return result
+def operator_star(stream, matcher):
+    results = []
+    while True:
+        state = stream.save()
+        try:
+            results.append(matcher.run(stream))
+        except MatchError:
+            stream.restore(state)
+            break
+    return stream.action(lambda self: [x.eval(self.runtime) for x in results])
 
-class Not:
-    def __init__(self, matcher):
-        self.matcher = matcher
-    def run(self, stream):
-        with stream.in_not():
-            state = stream.save()
-            try:
-                self.matcher.run(stream)
-            except MatchError:
-                return stream.action(lambda self: None)
-            finally:
-                stream.restore(state)
-        stream.error("not matched")
-
-class And:
-    def __init__(self, matchers):
-        self.matchers = matchers
-    def run(self, stream):
-        result = stream.action(lambda self: None)
-        for matcher in self.matchers:
-            result = matcher.run(stream)
-        return result
-
-class MatchList:
-    def __init__(self, matcher):
-        self.matcher = matcher
-    def run(self, stream):
-        return stream.match_list(self.matcher)
-
-class MatchCallRule:
-    def __init__(self, namespace):
-        self.namespace = namespace
-    def run(self, stream):
-        return stream.match_call_rule(self.namespace)
-
-class Bind:
-    def __init__(self, name, value):
-        self.name = name
-        self.value = value
-    def run(self, stream):
-        return stream.bind(self.name, self.value.run(stream))
-
-class MatchObject:
-    def __init__(self, fn, description):
-        self.fn = fn
-        self.description = description
-    def run(self, stream):
-        return stream.match(self.fn, self.description)
-
-class MatchRule:
-    def __init__(self, name):
-        self.name = name
-    def run(self, stream):
-        return rules[self.name].run(stream)
-
-class Star:
-    def __init__(self, matcher):
-        self.matcher = matcher
-    def run(self, stream):
-        results = []
-        while True:
-            state = stream.save()
-            try:
-                results.append(self.matcher.run(stream))
-            except MatchError:
-                stream.restore(state)
-                break
-        return stream.action(lambda self: [x.eval(self.runtime) for x in results])
-
-class Action:
-    def __init__(self, fn):
-        self.fn = fn
-    def run(self, stream):
-        return stream.action(self.fn)
+def operator_not(stream, matcher):
+    state = stream.save()
+    try:
+        matcher.run(stream)
+    except MatchError:
+        return stream.action(lambda self: None)
+    finally:
+        stream.restore(state)
+    stream.error("not matched")
 
 class RuntimeAction:
     def __init__(self, scope, fn):
@@ -134,25 +71,17 @@ class Stream:
         self.scopes = []
         self.index = 0
         self.latest_error = None
-        self.skip_record = False
     def action(self, fn):
         return RuntimeAction(self.scopes[-1], fn)
-    @contextlib.contextmanager
-    def in_not(self):
-        prev = self.skip_record
-        try:
-            self.skip_record = True
-            yield
-        finally:
-            self.skip_record = prev
     def save(self):
         return (self.items, [dict(x) for x in self.scopes], self.index)
     def restore(self, values):
         (self.items, self.scopes, self.index) = values
-    def push_scope(self):
+    def with_scope(self, matcher):
         self.scopes.append({})
-    def pop_scope(self):
-        return self.scopes.pop(-1)
+        result = matcher.run(self)
+        self.scopes.pop(-1)
+        return result
     def bind(self, name, value):
         self.scopes[-1][name] = value
         return value
@@ -184,7 +113,7 @@ class Stream:
                 return self.action(lambda self: object)
         self.error(f"expected {description}")
     def error(self, name):
-        if not self.skip_record and not self.latest_error or self.index > self.latest_error[2]:
+        if not self.latest_error or self.index > self.latest_error[2]:
             self.latest_error = (name, self.items, self.index)
         raise MatchError(*self.latest_error)
 
@@ -197,11 +126,14 @@ class MatchError(Exception):
 class Runtime:
 
     def __init__(self):
+        def append(list, thing):
+            list.append(thing)
         self.vars = {
             "len": len,
             "indent": indent,
             "join": join,
             "repr": repr,
+            "append": append,
         }
 
     def bind(self, name, value):
