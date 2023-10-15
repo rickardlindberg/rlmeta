@@ -261,11 +261,11 @@ rules['Parser.file'] = Or([
         Bind('xs', Star(Or([
             Scope(And([
                 MatchRule('Parser.space'),
-                MatchRule('Parser.grammar')]))]))),
+                MatchRule('Parser.namespace')]))]))),
         MatchRule('Parser.space'),
         Not(MatchObject(lambda x: True, 'True')),
         Action(lambda self: self.lookup('xs'))]))])
-rules['Parser.grammar'] = Or([
+rules['Parser.namespace'] = Or([
     Scope(And([
         Bind('x', MatchRule('Parser.name')),
         MatchRule('Parser.space'),
@@ -276,7 +276,7 @@ rules['Parser.grammar'] = Or([
         And([
             MatchObject(lambda x: x == '}', "x == '}'")]),
         Action(lambda self: concat([
-            splice(0, 'Grammar'),
+            splice(0, 'Namespace'),
             splice(0, self.lookup('x')),
             splice(1, self.lookup('ys'))]))]))])
 rules['Parser.rule'] = Or([
@@ -640,7 +640,7 @@ rules['Parser.space'] = Or([
             Scope(And([
                 And([
                     MatchObject(lambda x: x == '\n', "x == '\\n'")])]))]))]))])
-rules['CodeGenerator.Grammar'] = Or([
+rules['CodeGenerator.Namespace'] = Or([
     Scope(And([
         Bind('x', MatchObject(lambda x: True, 'True')),
         Bind('ys', Star(MatchRule('CodeGenerator.ast'))),

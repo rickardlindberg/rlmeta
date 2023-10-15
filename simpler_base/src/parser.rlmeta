@@ -1,8 +1,8 @@
 Parser {
   file =
-    | (space grammar)*:xs space !.            -> xs
-  grammar =
-    | name:x space '{' rule*:ys space '}'     -> ["Grammar" x ~ys]
+    | (space namespace)*:xs space !.          -> xs
+  namespace =
+    | name:x space '{' rule*:ys space '}'     -> ["Namespace" x ~ys]
   rule =
     | name:x space '=' choice:y               -> ["Rule" x y]
   choice =

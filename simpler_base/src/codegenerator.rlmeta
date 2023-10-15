@@ -1,5 +1,5 @@
 CodeGenerator {
-  Grammar       = .:x ast*:ys     -> x:namespace
+  Namespace     = .:x ast*:ys     -> x:namespace
                                   -> { ys }
   Rule          = .:x ast:y       -> { "rules['" namespace "." x "'] = " y "\n" }
   Or            = astList:x       -> { "Or([" x "])" }
