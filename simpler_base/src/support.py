@@ -1,203 +1,117 @@
-class VM:
+import contextlib
+import sys
 
-    def __init__(self, code, rules):
-        self.code = code
-        self.rules = rules
+class Or:
+    def __init__(self, matchers):
+        self.matchers = matchers
+    def run(self, stream):
+        for matcher in self.matchers:
+            state = stream.save()
+            try:
+                return matcher.run(stream)
+            except ParseError:
+                stream.restore(state)
+        stream.error("no or match")
 
-    def run(self, start_rule, stream):
-        self.action = SemanticAction(None)
-        self.pc = self.rules[start_rule]
-        self.call_backtrack_stack = []
-        self.stream, self.stream_rest = (stream, None)
-        self.pos, self.pos_rest = (0, tuple())
-        self.scope, self.scope_rest = (None, None)
-        self.latest_fail_message, self.latest_fail_pos = (None, tuple())
-        self.memo = {}
-        while True:
-            result = self.pop_arg()(self)
-            if result:
-                return result
+class Scope:
+    def __init__(self, matcher):
+        self.matcher = matcher
+    def run(self, stream):
+        stream.push_scope()
+        result = self.matcher.run(stream)
+        stream.pop_scope()
+        return result
 
-    def pop_arg(self):
-        code = self.code[self.pc]
-        self.pc += 1
-        return code
+class Not:
+    def __init__(self, matcher):
+        self.matcher = matcher
+    def run(self, stream):
+        with stream.in_not():
+            state = stream.save()
+            try:
+                self.matcher.run(stream)
+            except ParseError:
+                return stream.action(lambda self: None)
+            finally:
+                stream.restore(state)
+        stream.error("not matched")
 
-def PUSH_SCOPE(vm):
-    vm.scope_rest = (vm.scope, vm.scope_rest)
-    vm.scope = {}
+class And:
+    def __init__(self, matchers):
+        self.matchers = matchers
+    def run(self, stream):
+        result = stream.action(lambda self: None)
+        for matcher in self.matchers:
+            result = matcher.run(stream)
+        return result
 
-def POP_SCOPE(vm):
-    vm.scope, vm.scope_rest = vm.scope_rest
+class MatchList:
+    def __init__(self, matcher):
+        self.matcher = matcher
+    def run(self, stream):
+        return stream.match_list(self.matcher)
 
-def BACKTRACK(vm):
-    vm.call_backtrack_stack.append((
-        vm.pop_arg(), vm.stream, vm.stream_rest, vm.pos, vm.pos_rest, vm.scope, vm.scope_rest
-    ))
+class MatchCallRule:
+    def __init__(self, namespace):
+        self.namespace = namespace
+    def run(self, stream):
+        return stream.match_call_rule(self.namespace)
 
-def COMMIT(vm):
-    vm.call_backtrack_stack.pop()
-    vm.pc = vm.pop_arg()
-
-def CALL(vm):
-    CALL_(vm, vm.pop_arg())
-
-def CALL_(vm, pc):
-    key = (pc, vm.pos_rest+(vm.pos,))
-    if key in vm.memo:
-        if vm.memo[key][0] is None:
-            FAIL_(vm, vm.memo[key][1])
-        else:
-            vm.action, vm.stream, vm.stream_rest, vm.pos, vm.pos_rest = vm.memo[key]
-    else:
-        vm.call_backtrack_stack.append((vm.pc, key))
-        vm.pc = pc
-
-def RETURN(vm):
-    if not vm.call_backtrack_stack:
-        return vm.action
-    vm.pc, key = vm.call_backtrack_stack.pop()
-    vm.memo[key] = (vm.action, vm.stream, vm.stream_rest, vm.pos, vm.pos_rest)
-
-def MATCH(vm):
-    object_description = vm.pop_arg()
-    fn = vm.pop_arg()
-    MATCH_(vm, fn, ("expected {}", object_description))
-
-def MATCH_(vm, fn, message):
-    if vm.pos >= len(vm.stream) or not fn(vm.stream[vm.pos]):
-        FAIL_(vm, message)
-    else:
-        vm.action = SemanticAction(vm.stream[vm.pos])
-        vm.pos += 1
-        return True
-
-def MATCH_CALL_RULE(vm):
-    if MATCH_(vm, lambda x: x in vm.rules, ("expected rule name",)):
-        CALL_(vm, vm.rules[vm.action.value])
-
-def LIST_START(vm):
-    vm.scope_rest = (vm.scope, vm.scope_rest)
-    vm.scope = []
-
-def LIST_APPEND(vm):
-    vm.scope.append(vm.action)
-
-def LIST_END(vm):
-    vm.action = SemanticAction(vm.scope, lambda self: [x.eval(self.runtime) for x in self.value])
-    vm.scope, vm.scope_rest = vm.scope_rest
-
-def BIND(vm):
-    vm.scope[vm.pop_arg()] = vm.action
-
-def ACTION(vm):
-    vm.action = SemanticAction(vm.scope, vm.pop_arg())
-
-def PUSH_STREAM(vm):
-    if vm.pos >= len(vm.stream) or not isinstance(vm.stream[vm.pos], list):
-        FAIL_(vm, ("expected list",))
-    else:
-        vm.stream_rest = (vm.stream, vm.stream_rest)
-        vm.pos_rest = vm.pos_rest + (vm.pos,)
-        vm.stream = vm.stream[vm.pos]
-        vm.pos = 0
-
-def POP_STREAM(vm):
-    if vm.pos < len(vm.stream):
-        FAIL_(vm, ("expected end of list",))
-    else:
-        vm.stream, vm.stream_rest = vm.stream_rest
-        vm.pos, vm.pos_rest = vm.pos_rest[-1], vm.pos_rest[:-1]
-        vm.pos += 1
-
-def FAIL(vm):
-    FAIL_(vm, (vm.pop_arg(),))
-
-def FAIL_(vm, fail_message):
-    fail_pos = vm.pos_rest+(vm.pos,)
-    if fail_pos >= vm.latest_fail_pos:
-        vm.latest_fail_message = fail_message
-        vm.latest_fail_pos = fail_pos
-    call_backtrack_entry = tuple()
-    while vm.call_backtrack_stack:
-        call_backtrack_entry = vm.call_backtrack_stack.pop()
-        if len(call_backtrack_entry) == 7:
-            break
-        else:
-            vm.memo[call_backtrack_entry[1]] = (None, fail_message)
-    if len(call_backtrack_entry) != 7:
-        raise MatchError(
-            vm.latest_fail_message[0].format(*vm.latest_fail_message[1:]),
-            vm.latest_fail_pos[-1],
-            vm.stream
-        )
-    (vm.pc, vm.stream, vm.stream_rest, vm.pos, vm.pos_rest, vm.scope, vm.scope_rest) = call_backtrack_entry
-
-class SemanticAction(object):
-
-    def __init__(self, value, fn=lambda self: self.value):
+class Bind:
+    def __init__(self, name, value):
+        self.name = name
         self.value = value
-        self.fn = fn
+    def run(self, stream):
+        return stream.bind(self.name, self.value.run(stream))
 
+class MatchObject:
+    def __init__(self, fn, description):
+        self.fn = fn
+        self.description = description
+    def run(self, stream):
+        return stream.match(self.fn, self.description)
+
+class MatchRule:
+    def __init__(self, name):
+        self.name = name
+    def run(self, stream):
+        return rules[self.name].run(stream)
+
+class Star:
+    def __init__(self, matcher):
+        self.matcher = matcher
+    def run(self, stream):
+        results = []
+        while True:
+            state = stream.save()
+            try:
+                results.append(self.matcher.run(stream))
+            except ParseError:
+                stream.restore(state)
+                break
+        return stream.action(lambda self: [x.eval(self.runtime) for x in results])
+
+class Action:
+    def __init__(self, fn):
+        self.fn = fn
+    def run(self, stream):
+        return stream.action(self.fn)
+
+class RuntimeAction:
+    def __init__(self, scope, fn):
+        self.scope = scope
+        self.fn = fn
     def eval(self, runtime):
         self.runtime = runtime
         return self.fn(self)
-
     def bind(self, name, value, continuation):
-        self.runtime = self.runtime.set(name, value)
+        self.runtime.bind(name, value)
         return continuation()
-
     def lookup(self, name):
-        if name in self.value:
-            return self.value[name].eval(self.runtime)
+        if name in self.scope:
+            return self.scope[name].eval(self.runtime)
         else:
-            return self.runtime[name]
-
-class MatchError(Exception):
-
-    def __init__(self, message, pos, stream):
-        Exception.__init__(self)
-        self.message = message
-        self.pos = pos
-        self.stream = stream
-
-class Grammar(object):
-
-    def run(self, rule, stream, runtime={}):
-        return Runtime(self, dict(runtime, **{
-            "label": Counter(),
-            "indentprefix": "    ",
-            "list": list,
-            "dict": dict,
-            "add": lambda x, y: x.append(y),
-            "get": lambda x, y: x[y],
-            "set": lambda x, y, z: x.__setitem__(y, z),
-            "len": len,
-            "repr": repr,
-            "join": join,
-        })).run(rule, stream)
-
-class Runtime(dict):
-
-    def __init__(self, grammar, values):
-        dict.__init__(self, dict(values, run=self.run))
-        self.grammar = grammar
-
-    def set(self, key, value):
-        return Runtime(self.grammar, dict(self, **{key: value}))
-
-    def run(self, rule, stream):
-        return VM(self.grammar.code, self.grammar.rules).run(rule, stream).eval(self)
-
-class Counter(object):
-
-    def __init__(self):
-        self.value = 0
-
-    def __call__(self):
-        result = self.value
-        self.value += 1
-        return result
+            return self.runtime.lookup(name)
 
 def splice(depth, item):
     if depth == 0:
@@ -214,17 +128,118 @@ def join(items, delimiter=""):
         for item in items
     )
 
+class Stream:
+    def __init__(self, items):
+        self.items = items
+        self.scopes = []
+        self.index = 0
+        self.latest_error = None
+        self.skip_record = False
+    def action(self, fn):
+        return RuntimeAction(self.scopes[-1], fn)
+    @contextlib.contextmanager
+    def in_not(self):
+        prev = self.skip_record
+        try:
+            self.skip_record = True
+            yield
+        finally:
+            self.skip_record = prev
+    def save(self):
+        return (self.items, [dict(x) for x in self.scopes], self.index)
+    def restore(self, values):
+        (self.items, self.scopes, self.index) = values
+    def push_scope(self):
+        self.scopes.append({})
+    def pop_scope(self):
+        return self.scopes.pop(-1)
+    def bind(self, name, value):
+        self.scopes[-1][name] = value
+        return value
+    def match_list(self, matcher):
+        if self.index < len(self.items):
+            items, index = self.items, self.index
+            self.items = self.items[self.index]
+            self.index = 0
+            try:
+                result = matcher.run(self)
+            finally:
+                self.items, self.index = items, index
+                self.index += 1
+            return result
+        self.error("no list found")
+    def match_call_rule(self, namespace):
+        name = namespace + "." + self.items[self.index]
+        if name in rules:
+            rule = rules[name]
+            self.index += 1
+            return rule.run(self)
+        else:
+            self.error("unknown rule")
+    def match(self, fn, description):
+        if self.index < len(self.items):
+            object = self.items[self.index]
+            if self.index < len(self.items) and fn(object):
+                self.index += 1
+                return self.action(lambda self: object)
+        self.error(f"expected {description}")
+    def error(self, name):
+        if not self.skip_record and not self.latest_error or self.index > self.latest_error[2]:
+            self.latest_error = (name, self.items, self.index)
+        raise ParseError(*self.latest_error)
+
+class ParseError(Exception):
+    def __init__(self, name, items, index):
+        Exception.__init__(self, name)
+        self.items = items
+        self.index = index
+        self.stream = items
+        self.pos = index
+        self.message = str(self)
+    def report(self):
+        print(self.items[:self.index] + "<ERR>" + self.items[self.index:])
+        print()
+        print("ERROR: " + str(self))
+
+class Runtime:
+
+    def __init__(self):
+        self.vars = {
+            "len": len,
+            "label": Counter,
+            "indent": indent,
+            "join": join,
+            "repr": repr,
+            "indentprefix": "    ",
+        }
+
+    def bind(self, name, value):
+        self.vars[name] = value
+
+    def lookup(self, name):
+        return self.vars[name]
+
 def indent(text, prefix="    "):
     return "".join(prefix+line for line in text.splitlines(True))
+
+class Counter(object):
+
+    def __init__(self):
+        self.value = 0
+
+    def __call__(self):
+        result = self.value
+        self.value += 1
+        return result
 
 def compile_chain(grammars, source):
     import os
     import sys
     import pprint
-    for grammar, rule in grammars:
+    for rule in grammars:
         try:
-            source = grammar().run(rule, source)
-        except MatchError as e:
+            source = rules[rule].run(Stream(source)).eval(Runtime())
+        except ParseError as e:
             marker = "<ERROR POSITION>"
             if os.isatty(sys.stderr.fileno()):
                 marker = f"\033[0;31m{marker}\033[0m"
@@ -238,3 +253,5 @@ def compile_chain(grammars, source):
                 indent(stream_string)
             ))
     return source
+
+rules = {}

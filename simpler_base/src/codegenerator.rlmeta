@@ -1,57 +1,31 @@
 CodeGenerator {
-  Grammar       = .:x ast*:ys -> ["Grammar" x ~~ys]
-  Rule          = .:x ast:y   -> [["Rule" x]
-                                  ~y
-                                  ["OpCode" "RETURN"]]
-  Or            =
-    | ast:x Or:y              -> label():a -> label():b
-                              -> [["OpCode" "BACKTRACK"]
-                                  ["Target" a]
-                                  ~x
-                                  ["OpCode" "COMMIT"]
-                                  ["Target" b]
-                                  ["Label" a]
-                                  ~y
-                                  ["Label" b]]
-    | ast
-  Scope         = ast:x       -> [["OpCode" "PUSH_SCOPE"]
-                                  ~x
-                                  ["OpCode" "POP_SCOPE"]]
-  And           = ast*:xs     -> [~~xs]
-  Bind          = .:x ast:y   -> [~y
-                                  ["OpCode" "BIND"]
-                                  ["Value" x]]
-  Star          = ast:x       -> label():a -> label():b
-                              -> [["OpCode" "LIST_START"]
-                                  ["Label" a]
-                                  ["OpCode" "BACKTRACK"]
-                                  ["Target" b]
-                                  ~x
-                                  ["OpCode" "LIST_APPEND"]
-                                  ["OpCode" "COMMIT"]
-                                  ["Target" a]
-                                  ["Label" b]
-                                  ["OpCode" "LIST_END"]]
-  Not           = ast:x       -> label():a -> label():b
-                              -> [["OpCode" "BACKTRACK"]
-                                  ["Target" b]
-                                  ~x
-                                  ["OpCode" "COMMIT"]
-                                  ["Target" a]
-                                  ["Label" a]
-                                  ["OpCode" "FAIL"]
-                                  ["Value" "no match"]
-                                  ["Label" b]]
-  MatchCallRule =             -> [["OpCode" "MATCH_CALL_RULE"]]
-  MatchRule     = .:x         -> [["OpCode" "CALL"]
-                                  ["Target" x]]
-  MatchObject   = .:x         -> [["OpCode" "MATCH"]
-                                  x]
-  MatchList     = ast:x       -> [["OpCode" "PUSH_STREAM"]
-                                  ~x
-                                  ["OpCode" "POP_STREAM"]]
-  Action        = .:x         -> [["OpCode" "ACTION"]
-                                  ["Action" x]]
-  asts          = ast*:xs !.  -> xs
-  ast           = [%:x]       -> x
+  Grammar       = .:x ast*:ys     -> x:namespace
+                                  -> { ys }
+  Rule          = .:x ast:y       -> { "rules['" namespace "." x "'] = " y "\n" }
+  Or            = astList:x       -> { "Or([" x "])" }
+  Scope         = ast:x           -> { "Scope(" x ")" }
+  And           = astList:x       -> { "And([" x "])" }
+  Bind          = .:x ast:y       -> { "Bind(" repr(x) ", " y ")" }
+  Star          = ast:x           -> { "Star(" x ")" }
+  Not           = ast:x           -> { "Not(" x ")" }
+  MatchList     = ast:x           -> { "MatchList(" x ")" }
+  MatchCallRule =                 -> { "MatchCallRule('" namespace "')" }
+  MatchObject   = ast:x           -> { "MatchObject(lambda x: " x ", " repr(x) ")" }
+  MatchRule     = .:x             -> { "MatchRule('" namespace "." x "')" }
+  Eq            = .:x             -> { "x == " repr(x) }
+  Any           =                 -> { "True" }
+  Range         = .:x .:y         -> { repr(x) " <= x <= " repr(y) }
+  Action        = ast:x           -> {"Action(lambda self: " x ")"}
+  Set           = .:x ast:y ast:z -> { "self.bind(" repr(x) ", " y ", lambda: " z ")" }
+  String        = .:x             -> repr(x)
+  List          = astList:x       -> { "concat([" x "])" }
+  ListItem      = .:x ast:y       -> { "splice(" repr(x) ", " y ")" }
+  Format        = astList:x       -> { "join([" x "])" }
+  Indent        = ast:x           -> { "indent(" x ", "
+                                       "self.lookup('indentprefix'))" }
+  Call          = ast:x astList:y -> { x "(" y ")" }
+  Lookup        = .:x             -> { "self.lookup(" repr(x) ")" }
+  astList       = ast*:xs         -> { "\n" > join(xs ",\n") < }
+  asts          = ast*:xs !.      -> { xs }
+  ast           = [%:x]
 }

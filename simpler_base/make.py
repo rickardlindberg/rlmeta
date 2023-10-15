@@ -30,7 +30,6 @@ def compile_rlmeta(rlmeta):
         "--support",
         "--compile", "src/parser.rlmeta",
         "--compile", "src/codegenerator.rlmeta",
-        "--compile", "src/assembler.rlmeta",
         "--copy", "src/main.py",
     ])
 
@@ -43,7 +42,7 @@ def test(rlmeta):
     assert test_grammar(
         rlmeta,
         b"Grammar { x = % | . }",
-        b"print(compile_chain([(Grammar, 'x')], ['foo']))"
+        b"print(compile_chain(['Grammar.x'], ['foo']))"
     ) == b"foo\n"
 
 def test_grammar(rlmeta, grammar, main_code):

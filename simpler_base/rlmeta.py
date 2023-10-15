@@ -1,204 +1,118 @@
-SUPPORT = 'class VM:\n\n    def __init__(self, code, rules):\n        self.code = code\n        self.rules = rules\n\n    def run(self, start_rule, stream):\n        self.action = SemanticAction(None)\n        self.pc = self.rules[start_rule]\n        self.call_backtrack_stack = []\n        self.stream, self.stream_rest = (stream, None)\n        self.pos, self.pos_rest = (0, tuple())\n        self.scope, self.scope_rest = (None, None)\n        self.latest_fail_message, self.latest_fail_pos = (None, tuple())\n        self.memo = {}\n        while True:\n            result = self.pop_arg()(self)\n            if result:\n                return result\n\n    def pop_arg(self):\n        code = self.code[self.pc]\n        self.pc += 1\n        return code\n\ndef PUSH_SCOPE(vm):\n    vm.scope_rest = (vm.scope, vm.scope_rest)\n    vm.scope = {}\n\ndef POP_SCOPE(vm):\n    vm.scope, vm.scope_rest = vm.scope_rest\n\ndef BACKTRACK(vm):\n    vm.call_backtrack_stack.append((\n        vm.pop_arg(), vm.stream, vm.stream_rest, vm.pos, vm.pos_rest, vm.scope, vm.scope_rest\n    ))\n\ndef COMMIT(vm):\n    vm.call_backtrack_stack.pop()\n    vm.pc = vm.pop_arg()\n\ndef CALL(vm):\n    CALL_(vm, vm.pop_arg())\n\ndef CALL_(vm, pc):\n    key = (pc, vm.pos_rest+(vm.pos,))\n    if key in vm.memo:\n        if vm.memo[key][0] is None:\n            FAIL_(vm, vm.memo[key][1])\n        else:\n            vm.action, vm.stream, vm.stream_rest, vm.pos, vm.pos_rest = vm.memo[key]\n    else:\n        vm.call_backtrack_stack.append((vm.pc, key))\n        vm.pc = pc\n\ndef RETURN(vm):\n    if not vm.call_backtrack_stack:\n        return vm.action\n    vm.pc, key = vm.call_backtrack_stack.pop()\n    vm.memo[key] = (vm.action, vm.stream, vm.stream_rest, vm.pos, vm.pos_rest)\n\ndef MATCH(vm):\n    object_description = vm.pop_arg()\n    fn = vm.pop_arg()\n    MATCH_(vm, fn, ("expected {}", object_description))\n\ndef MATCH_(vm, fn, message):\n    if vm.pos >= len(vm.stream) or not fn(vm.stream[vm.pos]):\n        FAIL_(vm, message)\n    else:\n        vm.action = SemanticAction(vm.stream[vm.pos])\n        vm.pos += 1\n        return True\n\ndef MATCH_CALL_RULE(vm):\n    if MATCH_(vm, lambda x: x in vm.rules, ("expected rule name",)):\n        CALL_(vm, vm.rules[vm.action.value])\n\ndef LIST_START(vm):\n    vm.scope_rest = (vm.scope, vm.scope_rest)\n    vm.scope = []\n\ndef LIST_APPEND(vm):\n    vm.scope.append(vm.action)\n\ndef LIST_END(vm):\n    vm.action = SemanticAction(vm.scope, lambda self: [x.eval(self.runtime) for x in self.value])\n    vm.scope, vm.scope_rest = vm.scope_rest\n\ndef BIND(vm):\n    vm.scope[vm.pop_arg()] = vm.action\n\ndef ACTION(vm):\n    vm.action = SemanticAction(vm.scope, vm.pop_arg())\n\ndef PUSH_STREAM(vm):\n    if vm.pos >= len(vm.stream) or not isinstance(vm.stream[vm.pos], list):\n        FAIL_(vm, ("expected list",))\n    else:\n        vm.stream_rest = (vm.stream, vm.stream_rest)\n        vm.pos_rest = vm.pos_rest + (vm.pos,)\n        vm.stream = vm.stream[vm.pos]\n        vm.pos = 0\n\ndef POP_STREAM(vm):\n    if vm.pos < len(vm.stream):\n        FAIL_(vm, ("expected end of list",))\n    else:\n        vm.stream, vm.stream_rest = vm.stream_rest\n        vm.pos, vm.pos_rest = vm.pos_rest[-1], vm.pos_rest[:-1]\n        vm.pos += 1\n\ndef FAIL(vm):\n    FAIL_(vm, (vm.pop_arg(),))\n\ndef FAIL_(vm, fail_message):\n    fail_pos = vm.pos_rest+(vm.pos,)\n    if fail_pos >= vm.latest_fail_pos:\n        vm.latest_fail_message = fail_message\n        vm.latest_fail_pos = fail_pos\n    call_backtrack_entry = tuple()\n    while vm.call_backtrack_stack:\n        call_backtrack_entry = vm.call_backtrack_stack.pop()\n        if len(call_backtrack_entry) == 7:\n            break\n        else:\n            vm.memo[call_backtrack_entry[1]] = (None, fail_message)\n    if len(call_backtrack_entry) != 7:\n        raise MatchError(\n            vm.latest_fail_message[0].format(*vm.latest_fail_message[1:]),\n            vm.latest_fail_pos[-1],\n            vm.stream\n        )\n    (vm.pc, vm.stream, vm.stream_rest, vm.pos, vm.pos_rest, vm.scope, vm.scope_rest) = call_backtrack_entry\n\nclass SemanticAction(object):\n\n    def __init__(self, value, fn=lambda self: self.value):\n        self.value = value\n        self.fn = fn\n\n    def eval(self, runtime):\n        self.runtime = runtime\n        return self.fn(self)\n\n    def bind(self, name, value, continuation):\n        self.runtime = self.runtime.set(name, value)\n        return continuation()\n\n    def lookup(self, name):\n        if name in self.value:\n            return self.value[name].eval(self.runtime)\n        else:\n            return self.runtime[name]\n\nclass MatchError(Exception):\n\n    def __init__(self, message, pos, stream):\n        Exception.__init__(self)\n        self.message = message\n        self.pos = pos\n        self.stream = stream\n\nclass Grammar(object):\n\n    def run(self, rule, stream, runtime={}):\n        return Runtime(self, dict(runtime, **{\n            "label": Counter(),\n            "indentprefix": "    ",\n            "list": list,\n            "dict": dict,\n            "add": lambda x, y: x.append(y),\n            "get": lambda x, y: x[y],\n            "set": lambda x, y, z: x.__setitem__(y, z),\n            "len": len,\n            "repr": repr,\n            "join": join,\n        })).run(rule, stream)\n\nclass Runtime(dict):\n\n    def __init__(self, grammar, values):\n        dict.__init__(self, dict(values, run=self.run))\n        self.grammar = grammar\n\n    def set(self, key, value):\n        return Runtime(self.grammar, dict(self, **{key: value}))\n\n    def run(self, rule, stream):\n        return VM(self.grammar.code, self.grammar.rules).run(rule, stream).eval(self)\n\nclass Counter(object):\n\n    def __init__(self):\n        self.value = 0\n\n    def __call__(self):\n        result = self.value\n        self.value += 1\n        return result\n\ndef splice(depth, item):\n    if depth == 0:\n        return [item]\n    else:\n        return concat([splice(depth-1, subitem) for subitem in item])\n\ndef concat(lists):\n    return [x for xs in lists for x in xs]\n\ndef join(items, delimiter=""):\n    return delimiter.join(\n        join(item, delimiter) if isinstance(item, list) else str(item)\n        for item in items\n    )\n\ndef indent(text, prefix="    "):\n    return "".join(prefix+line for line in text.splitlines(True))\n\ndef compile_chain(grammars, source):\n    import os\n    import sys\n    import pprint\n    for grammar, rule in grammars:\n        try:\n            source = grammar().run(rule, source)\n        except MatchError as e:\n            marker = "<ERROR POSITION>"\n            if os.isatty(sys.stderr.fileno()):\n                marker = f"\\033[0;31m{marker}\\033[0m"\n            if isinstance(e.stream, str):\n                stream_string = e.stream[:e.pos] + marker + e.stream[e.pos:]\n            else:\n                stream_string = pprint.pformat(e.stream)\n            sys.exit("ERROR: {}\\nPOSITION: {}\\nSTREAM:\\n{}".format(\n                e.message,\n                e.pos,\n                indent(stream_string)\n            ))\n    return source\n'
-class VM:
+SUPPORT = 'import contextlib\nimport sys\n\nclass Or:\n    def __init__(self, matchers):\n        self.matchers = matchers\n    def run(self, stream):\n        for matcher in self.matchers:\n            state = stream.save()\n            try:\n                return matcher.run(stream)\n            except ParseError:\n                stream.restore(state)\n        stream.error("no or match")\n\nclass Scope:\n    def __init__(self, matcher):\n        self.matcher = matcher\n    def run(self, stream):\n        stream.push_scope()\n        result = self.matcher.run(stream)\n        stream.pop_scope()\n        return result\n\nclass Not:\n    def __init__(self, matcher):\n        self.matcher = matcher\n    def run(self, stream):\n        with stream.in_not():\n            state = stream.save()\n            try:\n                self.matcher.run(stream)\n            except ParseError:\n                return stream.action(lambda self: None)\n            finally:\n                stream.restore(state)\n        stream.error("not matched")\n\nclass And:\n    def __init__(self, matchers):\n        self.matchers = matchers\n    def run(self, stream):\n        result = stream.action(lambda self: None)\n        for matcher in self.matchers:\n            result = matcher.run(stream)\n        return result\n\nclass MatchList:\n    def __init__(self, matcher):\n        self.matcher = matcher\n    def run(self, stream):\n        return stream.match_list(self.matcher)\n\nclass MatchCallRule:\n    def __init__(self, namespace):\n        self.namespace = namespace\n    def run(self, stream):\n        return stream.match_call_rule(self.namespace)\n\nclass Bind:\n    def __init__(self, name, value):\n        self.name = name\n        self.value = value\n    def run(self, stream):\n        return stream.bind(self.name, self.value.run(stream))\n\nclass MatchObject:\n    def __init__(self, fn, description):\n        self.fn = fn\n        self.description = description\n    def run(self, stream):\n        return stream.match(self.fn, self.description)\n\nclass MatchRule:\n    def __init__(self, name):\n        self.name = name\n    def run(self, stream):\n        return rules[self.name].run(stream)\n\nclass Star:\n    def __init__(self, matcher):\n        self.matcher = matcher\n    def run(self, stream):\n        results = []\n        while True:\n            state = stream.save()\n            try:\n                results.append(self.matcher.run(stream))\n            except ParseError:\n                stream.restore(state)\n                break\n        return stream.action(lambda self: [x.eval(self.runtime) for x in results])\n\nclass Action:\n    def __init__(self, fn):\n        self.fn = fn\n    def run(self, stream):\n        return stream.action(self.fn)\n\nclass RuntimeAction:\n    def __init__(self, scope, fn):\n        self.scope = scope\n        self.fn = fn\n    def eval(self, runtime):\n        self.runtime = runtime\n        return self.fn(self)\n    def bind(self, name, value, continuation):\n        self.runtime.bind(name, value)\n        return continuation()\n    def lookup(self, name):\n        if name in self.scope:\n            return self.scope[name].eval(self.runtime)\n        else:\n            return self.runtime.lookup(name)\n\ndef splice(depth, item):\n    if depth == 0:\n        return [item]\n    else:\n        return concat([splice(depth-1, subitem) for subitem in item])\n\ndef concat(lists):\n    return [x for xs in lists for x in xs]\n\ndef join(items, delimiter=""):\n    return delimiter.join(\n        join(item, delimiter) if isinstance(item, list) else str(item)\n        for item in items\n    )\n\nclass Stream:\n    def __init__(self, items):\n        self.items = items\n        self.scopes = []\n        self.index = 0\n        self.latest_error = None\n        self.skip_record = False\n    def action(self, fn):\n        return RuntimeAction(self.scopes[-1], fn)\n    @contextlib.contextmanager\n    def in_not(self):\n        prev = self.skip_record\n        try:\n            self.skip_record = True\n            yield\n        finally:\n            self.skip_record = prev\n    def save(self):\n        return (self.items, [dict(x) for x in self.scopes], self.index)\n    def restore(self, values):\n        (self.items, self.scopes, self.index) = values\n    def push_scope(self):\n        self.scopes.append({})\n    def pop_scope(self):\n        return self.scopes.pop(-1)\n    def bind(self, name, value):\n        self.scopes[-1][name] = value\n        return value\n    def match_list(self, matcher):\n        if self.index < len(self.items):\n            items, index = self.items, self.index\n            self.items = self.items[self.index]\n            self.index = 0\n            try:\n                result = matcher.run(self)\n            finally:\n                self.items, self.index = items, index\n                self.index += 1\n            return result\n        self.error("no list found")\n    def match_call_rule(self, namespace):\n        name = namespace + "." + self.items[self.index]\n        if name in rules:\n            rule = rules[name]\n            self.index += 1\n            return rule.run(self)\n        else:\n            self.error("unknown rule")\n    def match(self, fn, description):\n        if self.index < len(self.items):\n            object = self.items[self.index]\n            if self.index < len(self.items) and fn(object):\n                self.index += 1\n                return self.action(lambda self: object)\n        self.error(f"expected {description}")\n    def error(self, name):\n        if not self.skip_record and not self.latest_error or self.index > self.latest_error[2]:\n            self.latest_error = (name, self.items, self.index)\n        raise ParseError(*self.latest_error)\n\nclass ParseError(Exception):\n    def __init__(self, name, items, index):\n        Exception.__init__(self, name)\n        self.items = items\n        self.index = index\n        self.stream = items\n        self.pos = index\n        self.message = str(self)\n    def report(self):\n        print(self.items[:self.index] + "<ERR>" + self.items[self.index:])\n        print()\n        print("ERROR: " + str(self))\n\nclass Runtime:\n\n    def __init__(self):\n        self.vars = {\n            "len": len,\n            "label": Counter,\n            "indent": indent,\n            "join": join,\n            "repr": repr,\n            "indentprefix": "    ",\n        }\n\n    def bind(self, name, value):\n        self.vars[name] = value\n\n    def lookup(self, name):\n        return self.vars[name]\n\ndef indent(text, prefix="    "):\n    return "".join(prefix+line for line in text.splitlines(True))\n\nclass Counter(object):\n\n    def __init__(self):\n        self.value = 0\n\n    def __call__(self):\n        result = self.value\n        self.value += 1\n        return result\n\ndef compile_chain(grammars, source):\n    import os\n    import sys\n    import pprint\n    for rule in grammars:\n        try:\n            source = rules[rule].run(Stream(source)).eval(Runtime())\n        except ParseError as e:\n            marker = "<ERROR POSITION>"\n            if os.isatty(sys.stderr.fileno()):\n                marker = f"\\033[0;31m{marker}\\033[0m"\n            if isinstance(e.stream, str):\n                stream_string = e.stream[:e.pos] + marker + e.stream[e.pos:]\n            else:\n                stream_string = pprint.pformat(e.stream)\n            sys.exit("ERROR: {}\\nPOSITION: {}\\nSTREAM:\\n{}".format(\n                e.message,\n                e.pos,\n                indent(stream_string)\n            ))\n    return source\n\nrules = {}\n'
+import contextlib
+import sys
 
-    def __init__(self, code, rules):
-        self.code = code
-        self.rules = rules
+class Or:
+    def __init__(self, matchers):
+        self.matchers = matchers
+    def run(self, stream):
+        for matcher in self.matchers:
+            state = stream.save()
+            try:
+                return matcher.run(stream)
+            except ParseError:
+                stream.restore(state)
+        stream.error("no or match")
 
-    def run(self, start_rule, stream):
-        self.action = SemanticAction(None)
-        self.pc = self.rules[start_rule]
-        self.call_backtrack_stack = []
-        self.stream, self.stream_rest = (stream, None)
-        self.pos, self.pos_rest = (0, tuple())
-        self.scope, self.scope_rest = (None, None)
-        self.latest_fail_message, self.latest_fail_pos = (None, tuple())
-        self.memo = {}
-        while True:
-            result = self.pop_arg()(self)
-            if result:
-                return result
+class Scope:
+    def __init__(self, matcher):
+        self.matcher = matcher
+    def run(self, stream):
+        stream.push_scope()
+        result = self.matcher.run(stream)
+        stream.pop_scope()
+        return result
 
-    def pop_arg(self):
-        code = self.code[self.pc]
-        self.pc += 1
-        return code
+class Not:
+    def __init__(self, matcher):
+        self.matcher = matcher
+    def run(self, stream):
+        with stream.in_not():
+            state = stream.save()
+            try:
+                self.matcher.run(stream)
+            except ParseError:
+                return stream.action(lambda self: None)
+            finally:
+                stream.restore(state)
+        stream.error("not matched")
 
-def PUSH_SCOPE(vm):
-    vm.scope_rest = (vm.scope, vm.scope_rest)
-    vm.scope = {}
+class And:
+    def __init__(self, matchers):
+        self.matchers = matchers
+    def run(self, stream):
+        result = stream.action(lambda self: None)
+        for matcher in self.matchers:
+            result = matcher.run(stream)
+        return result
 
-def POP_SCOPE(vm):
-    vm.scope, vm.scope_rest = vm.scope_rest
+class MatchList:
+    def __init__(self, matcher):
+        self.matcher = matcher
+    def run(self, stream):
+        return stream.match_list(self.matcher)
 
-def BACKTRACK(vm):
-    vm.call_backtrack_stack.append((
-        vm.pop_arg(), vm.stream, vm.stream_rest, vm.pos, vm.pos_rest, vm.scope, vm.scope_rest
-    ))
+class MatchCallRule:
+    def __init__(self, namespace):
+        self.namespace = namespace
+    def run(self, stream):
+        return stream.match_call_rule(self.namespace)
 
-def COMMIT(vm):
-    vm.call_backtrack_stack.pop()
-    vm.pc = vm.pop_arg()
-
-def CALL(vm):
-    CALL_(vm, vm.pop_arg())
-
-def CALL_(vm, pc):
-    key = (pc, vm.pos_rest+(vm.pos,))
-    if key in vm.memo:
-        if vm.memo[key][0] is None:
-            FAIL_(vm, vm.memo[key][1])
-        else:
-            vm.action, vm.stream, vm.stream_rest, vm.pos, vm.pos_rest = vm.memo[key]
-    else:
-        vm.call_backtrack_stack.append((vm.pc, key))
-        vm.pc = pc
-
-def RETURN(vm):
-    if not vm.call_backtrack_stack:
-        return vm.action
-    vm.pc, key = vm.call_backtrack_stack.pop()
-    vm.memo[key] = (vm.action, vm.stream, vm.stream_rest, vm.pos, vm.pos_rest)
-
-def MATCH(vm):
-    object_description = vm.pop_arg()
-    fn = vm.pop_arg()
-    MATCH_(vm, fn, ("expected {}", object_description))
-
-def MATCH_(vm, fn, message):
-    if vm.pos >= len(vm.stream) or not fn(vm.stream[vm.pos]):
-        FAIL_(vm, message)
-    else:
-        vm.action = SemanticAction(vm.stream[vm.pos])
-        vm.pos += 1
-        return True
-
-def MATCH_CALL_RULE(vm):
-    if MATCH_(vm, lambda x: x in vm.rules, ("expected rule name",)):
-        CALL_(vm, vm.rules[vm.action.value])
-
-def LIST_START(vm):
-    vm.scope_rest = (vm.scope, vm.scope_rest)
-    vm.scope = []
-
-def LIST_APPEND(vm):
-    vm.scope.append(vm.action)
-
-def LIST_END(vm):
-    vm.action = SemanticAction(vm.scope, lambda self: [x.eval(self.runtime) for x in self.value])
-    vm.scope, vm.scope_rest = vm.scope_rest
-
-def BIND(vm):
-    vm.scope[vm.pop_arg()] = vm.action
-
-def ACTION(vm):
-    vm.action = SemanticAction(vm.scope, vm.pop_arg())
-
-def PUSH_STREAM(vm):
-    if vm.pos >= len(vm.stream) or not isinstance(vm.stream[vm.pos], list):
-        FAIL_(vm, ("expected list",))
-    else:
-        vm.stream_rest = (vm.stream, vm.stream_rest)
-        vm.pos_rest = vm.pos_rest + (vm.pos,)
-        vm.stream = vm.stream[vm.pos]
-        vm.pos = 0
-
-def POP_STREAM(vm):
-    if vm.pos < len(vm.stream):
-        FAIL_(vm, ("expected end of list",))
-    else:
-        vm.stream, vm.stream_rest = vm.stream_rest
-        vm.pos, vm.pos_rest = vm.pos_rest[-1], vm.pos_rest[:-1]
-        vm.pos += 1
-
-def FAIL(vm):
-    FAIL_(vm, (vm.pop_arg(),))
-
-def FAIL_(vm, fail_message):
-    fail_pos = vm.pos_rest+(vm.pos,)
-    if fail_pos >= vm.latest_fail_pos:
-        vm.latest_fail_message = fail_message
-        vm.latest_fail_pos = fail_pos
-    call_backtrack_entry = tuple()
-    while vm.call_backtrack_stack:
-        call_backtrack_entry = vm.call_backtrack_stack.pop()
-        if len(call_backtrack_entry) == 7:
-            break
-        else:
-            vm.memo[call_backtrack_entry[1]] = (None, fail_message)
-    if len(call_backtrack_entry) != 7:
-        raise MatchError(
-            vm.latest_fail_message[0].format(*vm.latest_fail_message[1:]),
-            vm.latest_fail_pos[-1],
-            vm.stream
-        )
-    (vm.pc, vm.stream, vm.stream_rest, vm.pos, vm.pos_rest, vm.scope, vm.scope_rest) = call_backtrack_entry
-
-class SemanticAction(object):
-
-    def __init__(self, value, fn=lambda self: self.value):
+class Bind:
+    def __init__(self, name, value):
+        self.name = name
         self.value = value
-        self.fn = fn
+    def run(self, stream):
+        return stream.bind(self.name, self.value.run(stream))
 
+class MatchObject:
+    def __init__(self, fn, description):
+        self.fn = fn
+        self.description = description
+    def run(self, stream):
+        return stream.match(self.fn, self.description)
+
+class MatchRule:
+    def __init__(self, name):
+        self.name = name
+    def run(self, stream):
+        return rules[self.name].run(stream)
+
+class Star:
+    def __init__(self, matcher):
+        self.matcher = matcher
+    def run(self, stream):
+        results = []
+        while True:
+            state = stream.save()
+            try:
+                results.append(self.matcher.run(stream))
+            except ParseError:
+                stream.restore(state)
+                break
+        return stream.action(lambda self: [x.eval(self.runtime) for x in results])
+
+class Action:
+    def __init__(self, fn):
+        self.fn = fn
+    def run(self, stream):
+        return stream.action(self.fn)
+
+class RuntimeAction:
+    def __init__(self, scope, fn):
+        self.scope = scope
+        self.fn = fn
     def eval(self, runtime):
         self.runtime = runtime
         return self.fn(self)
-
     def bind(self, name, value, continuation):
-        self.runtime = self.runtime.set(name, value)
+        self.runtime.bind(name, value)
         return continuation()
-
     def lookup(self, name):
-        if name in self.value:
-            return self.value[name].eval(self.runtime)
+        if name in self.scope:
+            return self.scope[name].eval(self.runtime)
         else:
-            return self.runtime[name]
-
-class MatchError(Exception):
-
-    def __init__(self, message, pos, stream):
-        Exception.__init__(self)
-        self.message = message
-        self.pos = pos
-        self.stream = stream
-
-class Grammar(object):
-
-    def run(self, rule, stream, runtime={}):
-        return Runtime(self, dict(runtime, **{
-            "label": Counter(),
-            "indentprefix": "    ",
-            "list": list,
-            "dict": dict,
-            "add": lambda x, y: x.append(y),
-            "get": lambda x, y: x[y],
-            "set": lambda x, y, z: x.__setitem__(y, z),
-            "len": len,
-            "repr": repr,
-            "join": join,
-        })).run(rule, stream)
-
-class Runtime(dict):
-
-    def __init__(self, grammar, values):
-        dict.__init__(self, dict(values, run=self.run))
-        self.grammar = grammar
-
-    def set(self, key, value):
-        return Runtime(self.grammar, dict(self, **{key: value}))
-
-    def run(self, rule, stream):
-        return VM(self.grammar.code, self.grammar.rules).run(rule, stream).eval(self)
-
-class Counter(object):
-
-    def __init__(self):
-        self.value = 0
-
-    def __call__(self):
-        result = self.value
-        self.value += 1
-        return result
+            return self.runtime.lookup(name)
 
 def splice(depth, item):
     if depth == 0:
@@ -215,17 +129,118 @@ def join(items, delimiter=""):
         for item in items
     )
 
+class Stream:
+    def __init__(self, items):
+        self.items = items
+        self.scopes = []
+        self.index = 0
+        self.latest_error = None
+        self.skip_record = False
+    def action(self, fn):
+        return RuntimeAction(self.scopes[-1], fn)
+    @contextlib.contextmanager
+    def in_not(self):
+        prev = self.skip_record
+        try:
+            self.skip_record = True
+            yield
+        finally:
+            self.skip_record = prev
+    def save(self):
+        return (self.items, [dict(x) for x in self.scopes], self.index)
+    def restore(self, values):
+        (self.items, self.scopes, self.index) = values
+    def push_scope(self):
+        self.scopes.append({})
+    def pop_scope(self):
+        return self.scopes.pop(-1)
+    def bind(self, name, value):
+        self.scopes[-1][name] = value
+        return value
+    def match_list(self, matcher):
+        if self.index < len(self.items):
+            items, index = self.items, self.index
+            self.items = self.items[self.index]
+            self.index = 0
+            try:
+                result = matcher.run(self)
+            finally:
+                self.items, self.index = items, index
+                self.index += 1
+            return result
+        self.error("no list found")
+    def match_call_rule(self, namespace):
+        name = namespace + "." + self.items[self.index]
+        if name in rules:
+            rule = rules[name]
+            self.index += 1
+            return rule.run(self)
+        else:
+            self.error("unknown rule")
+    def match(self, fn, description):
+        if self.index < len(self.items):
+            object = self.items[self.index]
+            if self.index < len(self.items) and fn(object):
+                self.index += 1
+                return self.action(lambda self: object)
+        self.error(f"expected {description}")
+    def error(self, name):
+        if not self.skip_record and not self.latest_error or self.index > self.latest_error[2]:
+            self.latest_error = (name, self.items, self.index)
+        raise ParseError(*self.latest_error)
+
+class ParseError(Exception):
+    def __init__(self, name, items, index):
+        Exception.__init__(self, name)
+        self.items = items
+        self.index = index
+        self.stream = items
+        self.pos = index
+        self.message = str(self)
+    def report(self):
+        print(self.items[:self.index] + "<ERR>" + self.items[self.index:])
+        print()
+        print("ERROR: " + str(self))
+
+class Runtime:
+
+    def __init__(self):
+        self.vars = {
+            "len": len,
+            "label": Counter,
+            "indent": indent,
+            "join": join,
+            "repr": repr,
+            "indentprefix": "    ",
+        }
+
+    def bind(self, name, value):
+        self.vars[name] = value
+
+    def lookup(self, name):
+        return self.vars[name]
+
 def indent(text, prefix="    "):
     return "".join(prefix+line for line in text.splitlines(True))
+
+class Counter(object):
+
+    def __init__(self):
+        self.value = 0
+
+    def __call__(self):
+        result = self.value
+        self.value += 1
+        return result
 
 def compile_chain(grammars, source):
     import os
     import sys
     import pprint
-    for grammar, rule in grammars:
+    for rule in grammars:
         try:
-            source = grammar().run(rule, source)
-        except MatchError as e:
+            source = rules[rule].run(Stream(source)).eval(Runtime())
+        except ParseError as e:
             marker = "<ERROR POSITION>"
             if os.isatty(sys.stderr.fileno()):
                 marker = f"\033[0;31m{marker}\033[0m"
@@ -239,1395 +254,604 @@ def compile_chain(grammars, source):
                 indent(stream_string)
             ))
     return source
-class Parser(Grammar):
-    rules = {
-        'file': 0,
-        'grammar': 31,
-        'rule': 61,
-        'choice': 79,
-        'sequence': 117,
-        'expr': 137,
-        'expr1': 163,
-        'expr2': 232,
-        'matchChar': 377,
-        'maybeAction': 386,
-        'actionExpr': 403,
-        'hostExpr': 463,
-        'hostListItem': 575,
-        'formatExpr': 598,
-        'var': 632,
-        'string': 654,
-        'char': 687,
-        'innerChar': 711,
-        'escape': 728,
-        'name': 769,
-        'nameStart': 791,
-        'nameChar': 806,
-        'space': 830
-    }
-    code = [
-        PUSH_SCOPE,
-        LIST_START,
-        BACKTRACK,
-        13,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        CALL,
-        31,
-        POP_SCOPE,
-        LIST_APPEND,
-        COMMIT,
-        2,
-        LIST_END,
-        BIND,
-        'xs',
-        CALL,
-        830,
-        BACKTRACK,
-        27,
-        MATCH,
-        'any',
-        lambda x: True,
-        COMMIT,
-        25,
-        FAIL,
-        'no match',
-        ACTION,
-        lambda self: self.lookup('xs'),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        769,
-        BIND,
-        'x',
-        CALL,
-        830,
-        MATCH,
-        '{',
-        lambda x: x == '{',
-        LIST_START,
-        BACKTRACK,
-        49,
-        CALL,
-        61,
-        LIST_APPEND,
-        COMMIT,
-        42,
-        LIST_END,
-        BIND,
-        'ys',
-        CALL,
-        830,
-        MATCH,
-        '}',
-        lambda x: x == '}',
-        ACTION,
-        lambda self: concat([splice(0, 'Grammar'), splice(0, self.lookup('x')), splice(1, self.lookup('ys'))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        769,
-        BIND,
-        'x',
-        CALL,
-        830,
-        MATCH,
-        '=',
-        lambda x: x == '=',
-        CALL,
-        79,
-        BIND,
-        'y',
-        ACTION,
-        lambda self: concat([splice(0, 'Rule'), splice(0, self.lookup('x')), splice(0, self.lookup('y'))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        BACKTRACK,
-        91,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '|',
-        lambda x: x == '|',
-        POP_SCOPE,
-        COMMIT,
-        91,
-        CALL,
-        117,
-        BIND,
-        'x',
-        LIST_START,
-        BACKTRACK,
-        110,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '|',
-        lambda x: x == '|',
-        CALL,
-        117,
-        POP_SCOPE,
-        LIST_APPEND,
-        COMMIT,
-        96,
-        LIST_END,
-        BIND,
-        'xs',
-        ACTION,
-        lambda self: concat([splice(0, 'Or'), splice(0, self.lookup('x')), splice(1, self.lookup('xs'))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        LIST_START,
-        BACKTRACK,
-        126,
-        CALL,
-        137,
-        LIST_APPEND,
-        COMMIT,
-        119,
-        LIST_END,
-        BIND,
-        'xs',
-        CALL,
-        386,
-        BIND,
-        'ys',
-        ACTION,
-        lambda self: concat([splice(0, 'Scope'), splice(0, concat([splice(0, 'And'), splice(1, self.lookup('xs')), splice(1, self.lookup('ys'))]))]),
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        158,
-        PUSH_SCOPE,
-        CALL,
-        163,
-        BIND,
-        'x',
-        CALL,
-        830,
-        MATCH,
-        ':',
-        lambda x: x == ':',
-        CALL,
-        769,
-        BIND,
-        'y',
-        ACTION,
-        lambda self: concat([splice(0, 'Bind'), splice(0, self.lookup('y')), splice(0, self.lookup('x'))]),
-        POP_SCOPE,
-        COMMIT,
-        162,
-        PUSH_SCOPE,
-        CALL,
-        163,
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        180,
-        PUSH_SCOPE,
-        CALL,
-        232,
-        BIND,
-        'x',
-        CALL,
-        830,
-        MATCH,
-        '*',
-        lambda x: x == '*',
-        ACTION,
-        lambda self: concat([splice(0, 'Star'), splice(0, self.lookup('x'))]),
-        POP_SCOPE,
-        COMMIT,
-        231,
-        BACKTRACK,
-        197,
-        PUSH_SCOPE,
-        CALL,
-        232,
-        BIND,
-        'x',
-        CALL,
-        830,
-        MATCH,
-        '?',
-        lambda x: x == '?',
-        ACTION,
-        lambda self: concat([splice(0, 'Or'), splice(0, self.lookup('x')), splice(0, concat([splice(0, 'And')]))]),
-        POP_SCOPE,
-        COMMIT,
-        231,
-        BACKTRACK,
-        214,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '!',
-        lambda x: x == '!',
-        CALL,
-        232,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: concat([splice(0, 'Not'), splice(0, self.lookup('x'))]),
-        POP_SCOPE,
-        COMMIT,
-        231,
-        BACKTRACK,
-        227,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '%',
-        lambda x: x == '%',
-        ACTION,
-        lambda self: concat([splice(0, 'MatchCallRule')]),
-        POP_SCOPE,
-        COMMIT,
-        231,
-        PUSH_SCOPE,
-        CALL,
-        232,
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        257,
-        PUSH_SCOPE,
-        CALL,
-        769,
-        BIND,
-        'x',
-        BACKTRACK,
-        252,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '=',
-        lambda x: x == '=',
-        POP_SCOPE,
-        COMMIT,
-        250,
-        FAIL,
-        'no match',
-        ACTION,
-        lambda self: concat([splice(0, 'MatchRule'), splice(0, self.lookup('x'))]),
-        POP_SCOPE,
-        COMMIT,
-        376,
-        BACKTRACK,
-        278,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        CALL,
-        687,
-        BIND,
-        'x',
-        MATCH,
-        '-',
-        lambda x: x == '-',
-        CALL,
-        687,
-        BIND,
-        'y',
-        ACTION,
-        lambda self: concat([splice(0, 'MatchObject'), splice(0, concat([splice(0, 'Range'), splice(0, self.lookup('x')), splice(0, self.lookup('y'))]))]),
-        POP_SCOPE,
-        COMMIT,
-        376,
-        BACKTRACK,
-        316,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        "'",
-        lambda x: x == "'",
-        LIST_START,
-        BACKTRACK,
-        305,
-        PUSH_SCOPE,
-        BACKTRACK,
-        299,
-        MATCH,
-        "'",
-        lambda x: x == "'",
-        COMMIT,
-        297,
-        FAIL,
-        'no match',
-        CALL,
-        377,
-        POP_SCOPE,
-        LIST_APPEND,
-        COMMIT,
-        287,
-        LIST_END,
-        BIND,
-        'xs',
-        MATCH,
-        "'",
-        lambda x: x == "'",
-        ACTION,
-        lambda self: concat([splice(0, 'And'), splice(1, self.lookup('xs'))]),
-        POP_SCOPE,
-        COMMIT,
-        376,
-        BACKTRACK,
-        329,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '.',
-        lambda x: x == '.',
-        ACTION,
-        lambda self: concat([splice(0, 'MatchObject'), splice(0, concat([splice(0, 'Any')]))]),
-        POP_SCOPE,
-        COMMIT,
-        376,
-        BACKTRACK,
-        351,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '(',
-        lambda x: x == '(',
-        CALL,
-        79,
-        BIND,
-        'x',
-        CALL,
-        830,
-        MATCH,
-        ')',
-        lambda x: x == ')',
-        ACTION,
-        lambda self: self.lookup('x'),
-        POP_SCOPE,
-        COMMIT,
-        376,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '[',
-        lambda x: x == '[',
-        LIST_START,
-        BACKTRACK,
-        365,
-        CALL,
-        137,
-        LIST_APPEND,
-        COMMIT,
-        358,
-        LIST_END,
-        BIND,
-        'xs',
-        CALL,
-        830,
-        MATCH,
-        ']',
-        lambda x: x == ']',
-        ACTION,
-        lambda self: concat([splice(0, 'MatchList'), splice(0, concat([splice(0, 'And'), splice(1, self.lookup('xs'))]))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        711,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: concat([splice(0, 'MatchObject'), splice(0, concat([splice(0, 'Eq'), splice(0, self.lookup('x'))]))]),
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        398,
-        PUSH_SCOPE,
-        CALL,
-        403,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: concat([splice(0, concat([splice(0, 'Action'), splice(0, self.lookup('x'))]))]),
-        POP_SCOPE,
-        COMMIT,
-        402,
-        PUSH_SCOPE,
-        ACTION,
-        lambda self: concat([]),
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        446,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '-',
-        lambda x: x == '-',
-        MATCH,
-        '>',
-        lambda x: x == '>',
-        CALL,
-        463,
-        BIND,
-        'x',
-        BACKTRACK,
-        431,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        ':',
-        lambda x: x == ':',
-        CALL,
-        769,
-        POP_SCOPE,
-        COMMIT,
-        435,
-        PUSH_SCOPE,
-        ACTION,
-        lambda self: '',
-        POP_SCOPE,
-        BIND,
-        'y',
-        CALL,
-        403,
-        BIND,
-        'z',
-        ACTION,
-        lambda self: concat([splice(0, 'Set'), splice(0, self.lookup('y')), splice(0, self.lookup('x')), splice(0, self.lookup('z'))]),
-        POP_SCOPE,
-        COMMIT,
-        462,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '-',
-        lambda x: x == '-',
-        MATCH,
-        '>',
-        lambda x: x == '>',
-        CALL,
-        463,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: self.lookup('x'),
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        477,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        CALL,
-        654,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: concat([splice(0, 'String'), splice(0, self.lookup('x'))]),
-        POP_SCOPE,
-        COMMIT,
-        574,
-        BACKTRACK,
-        506,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '[',
-        lambda x: x == '[',
-        LIST_START,
-        BACKTRACK,
-        493,
-        CALL,
-        575,
-        LIST_APPEND,
-        COMMIT,
-        486,
-        LIST_END,
-        BIND,
-        'xs',
-        CALL,
-        830,
-        MATCH,
-        ']',
-        lambda x: x == ']',
-        ACTION,
-        lambda self: concat([splice(0, 'List'), splice(1, self.lookup('xs'))]),
-        POP_SCOPE,
-        COMMIT,
-        574,
-        BACKTRACK,
-        535,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '{',
-        lambda x: x == '{',
-        LIST_START,
-        BACKTRACK,
-        522,
-        CALL,
-        598,
-        LIST_APPEND,
-        COMMIT,
-        515,
-        LIST_END,
-        BIND,
-        'xs',
-        CALL,
-        830,
-        MATCH,
-        '}',
-        lambda x: x == '}',
-        ACTION,
-        lambda self: concat([splice(0, 'Format'), splice(1, self.lookup('xs'))]),
-        POP_SCOPE,
-        COMMIT,
-        574,
-        BACKTRACK,
-        568,
-        PUSH_SCOPE,
-        CALL,
-        632,
-        BIND,
-        'x',
-        CALL,
-        830,
-        MATCH,
-        '(',
-        lambda x: x == '(',
-        LIST_START,
-        BACKTRACK,
-        555,
-        CALL,
-        463,
-        LIST_APPEND,
-        COMMIT,
-        548,
-        LIST_END,
-        BIND,
-        'ys',
-        CALL,
-        830,
-        MATCH,
-        ')',
-        lambda x: x == ')',
-        ACTION,
-        lambda self: concat([splice(0, 'Call'), splice(0, self.lookup('x')), splice(1, self.lookup('ys'))]),
-        POP_SCOPE,
-        COMMIT,
-        574,
-        PUSH_SCOPE,
-        CALL,
-        632,
-        BIND,
-        'x',
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        LIST_START,
-        BACKTRACK,
-        587,
-        MATCH,
-        '~',
-        lambda x: x == '~',
-        LIST_APPEND,
-        COMMIT,
-        579,
-        LIST_END,
-        BIND,
-        'ys',
-        CALL,
-        463,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: concat([splice(0, 'ListItem'), splice(0, self.lookup('len')(self.lookup('ys'))), splice(0, self.lookup('x'))]),
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        627,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '>',
-        lambda x: x == '>',
-        LIST_START,
-        BACKTRACK,
-        614,
-        CALL,
-        598,
-        LIST_APPEND,
-        COMMIT,
-        607,
-        LIST_END,
-        BIND,
-        'xs',
-        CALL,
-        830,
-        MATCH,
-        '<',
-        lambda x: x == '<',
-        ACTION,
-        lambda self: concat([splice(0, 'Indent'), splice(0, concat([splice(0, 'Format'), splice(1, self.lookup('xs'))]))]),
-        POP_SCOPE,
-        COMMIT,
-        631,
-        PUSH_SCOPE,
-        CALL,
-        463,
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        769,
-        BIND,
-        'x',
-        BACKTRACK,
-        650,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        MATCH,
-        '=',
-        lambda x: x == '=',
-        POP_SCOPE,
-        COMMIT,
-        648,
-        FAIL,
-        'no match',
-        ACTION,
-        lambda self: concat([splice(0, 'Lookup'), splice(0, self.lookup('x'))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        '"',
-        lambda x: x == '"',
-        LIST_START,
-        BACKTRACK,
-        677,
-        PUSH_SCOPE,
-        BACKTRACK,
-        671,
-        MATCH,
-        '"',
-        lambda x: x == '"',
-        COMMIT,
-        669,
-        FAIL,
-        'no match',
-        CALL,
-        711,
-        POP_SCOPE,
-        LIST_APPEND,
-        COMMIT,
-        659,
-        LIST_END,
-        BIND,
-        'xs',
-        MATCH,
-        '"',
-        lambda x: x == '"',
-        ACTION,
-        lambda self: join([self.lookup('xs')]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        "'",
-        lambda x: x == "'",
-        BACKTRACK,
-        700,
-        MATCH,
-        "'",
-        lambda x: x == "'",
-        COMMIT,
-        698,
-        FAIL,
-        'no match',
-        CALL,
-        711,
-        BIND,
-        'x',
-        MATCH,
-        "'",
-        lambda x: x == "'",
-        ACTION,
-        lambda self: self.lookup('x'),
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        722,
-        PUSH_SCOPE,
-        MATCH,
-        '\\',
-        lambda x: x == '\\',
-        CALL,
-        728,
-        POP_SCOPE,
-        COMMIT,
-        727,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        739,
-        PUSH_SCOPE,
-        MATCH,
-        '\\',
-        lambda x: x == '\\',
-        ACTION,
-        lambda self: '\\',
-        POP_SCOPE,
-        COMMIT,
-        768,
-        BACKTRACK,
-        750,
-        PUSH_SCOPE,
-        MATCH,
-        "'",
-        lambda x: x == "'",
-        ACTION,
-        lambda self: "'",
-        POP_SCOPE,
-        COMMIT,
-        768,
-        BACKTRACK,
-        761,
-        PUSH_SCOPE,
-        MATCH,
-        '"',
-        lambda x: x == '"',
-        ACTION,
-        lambda self: '"',
-        POP_SCOPE,
-        COMMIT,
-        768,
-        PUSH_SCOPE,
-        MATCH,
-        'n',
-        lambda x: x == 'n',
-        ACTION,
-        lambda self: '\n',
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        830,
-        CALL,
-        791,
-        BIND,
-        'x',
-        LIST_START,
-        BACKTRACK,
-        784,
-        CALL,
-        806,
-        LIST_APPEND,
-        COMMIT,
-        777,
-        LIST_END,
-        BIND,
-        'xs',
-        ACTION,
-        lambda self: join([self.lookup('x'), self.lookup('xs')]),
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        800,
-        PUSH_SCOPE,
-        MATCH,
-        "range 'a'-'z'",
-        lambda x: 'a' <= x <= 'z',
-        POP_SCOPE,
-        COMMIT,
-        805,
-        PUSH_SCOPE,
-        MATCH,
-        "range 'A'-'Z'",
-        lambda x: 'A' <= x <= 'Z',
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        815,
-        PUSH_SCOPE,
-        MATCH,
-        "range 'a'-'z'",
-        lambda x: 'a' <= x <= 'z',
-        POP_SCOPE,
-        COMMIT,
-        829,
-        BACKTRACK,
-        824,
-        PUSH_SCOPE,
-        MATCH,
-        "range 'A'-'Z'",
-        lambda x: 'A' <= x <= 'Z',
-        POP_SCOPE,
-        COMMIT,
-        829,
-        PUSH_SCOPE,
-        MATCH,
-        "range '0'-'9'",
-        lambda x: '0' <= x <= '9',
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        LIST_START,
-        BACKTRACK,
-        851,
-        BACKTRACK,
-        843,
-        PUSH_SCOPE,
-        MATCH,
-        ' ',
-        lambda x: x == ' ',
-        POP_SCOPE,
-        COMMIT,
-        848,
-        PUSH_SCOPE,
-        MATCH,
-        '\n',
-        lambda x: x == '\n',
-        POP_SCOPE,
-        LIST_APPEND,
-        COMMIT,
-        832,
-        LIST_END,
-        POP_SCOPE,
-        RETURN
-    ]
-class CodeGenerator(Grammar):
-    rules = {
-        'Grammar': 0,
-        'Rule': 21,
-        'Or': 35,
-        'Scope': 56,
-        'And': 65,
-        'Bind': 81,
-        'Star': 95,
-        'Not': 104,
-        'MatchCallRule': 113,
-        'MatchRule': 118,
-        'MatchObject': 128,
-        'MatchList': 138,
-        'Action': 147,
-        'asts': 157,
-        'ast': 182
-    }
-    code = [
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        LIST_START,
-        BACKTRACK,
-        14,
-        CALL,
-        182,
-        LIST_APPEND,
-        COMMIT,
-        7,
-        LIST_END,
-        BIND,
-        'ys',
-        ACTION,
-        lambda self: concat([splice(0, 'Grammar'), splice(0, self.lookup('x')), splice(2, self.lookup('ys'))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        CALL,
-        182,
-        BIND,
-        'y',
-        ACTION,
-        lambda self: concat([splice(0, concat([splice(0, 'Rule'), splice(0, self.lookup('x'))])), splice(1, self.lookup('y')), splice(0, concat([splice(0, 'OpCode'), splice(0, 'RETURN')]))]),
-        POP_SCOPE,
-        RETURN,
-        BACKTRACK,
-        51,
-        PUSH_SCOPE,
-        CALL,
-        182,
-        BIND,
-        'x',
-        CALL,
-        35,
-        BIND,
-        'y',
-        ACTION,
-        lambda self: self.bind('a', self.lookup('label')(), lambda: self.bind('b', self.lookup('label')(), lambda: concat([splice(0, concat([splice(0, 'OpCode'), splice(0, 'BACKTRACK')])), splice(0, concat([splice(0, 'Target'), splice(0, self.lookup('a'))])), splice(1, self.lookup('x')), splice(0, concat([splice(0, 'OpCode'), splice(0, 'COMMIT')])), splice(0, concat([splice(0, 'Target'), splice(0, self.lookup('b'))])), splice(0, concat([splice(0, 'Label'), splice(0, self.lookup('a'))])), splice(1, self.lookup('y')), splice(0, concat([splice(0, 'Label'), splice(0, self.lookup('b'))]))]))),
-        POP_SCOPE,
-        COMMIT,
-        55,
-        PUSH_SCOPE,
-        CALL,
-        182,
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        182,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: concat([splice(0, concat([splice(0, 'OpCode'), splice(0, 'PUSH_SCOPE')])), splice(1, self.lookup('x')), splice(0, concat([splice(0, 'OpCode'), splice(0, 'POP_SCOPE')]))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        LIST_START,
-        BACKTRACK,
-        74,
-        CALL,
-        182,
-        LIST_APPEND,
-        COMMIT,
-        67,
-        LIST_END,
-        BIND,
-        'xs',
-        ACTION,
-        lambda self: concat([splice(2, self.lookup('xs'))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        CALL,
-        182,
-        BIND,
-        'y',
-        ACTION,
-        lambda self: concat([splice(1, self.lookup('y')), splice(0, concat([splice(0, 'OpCode'), splice(0, 'BIND')])), splice(0, concat([splice(0, 'Value'), splice(0, self.lookup('x'))]))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        182,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: self.bind('a', self.lookup('label')(), lambda: self.bind('b', self.lookup('label')(), lambda: concat([splice(0, concat([splice(0, 'OpCode'), splice(0, 'LIST_START')])), splice(0, concat([splice(0, 'Label'), splice(0, self.lookup('a'))])), splice(0, concat([splice(0, 'OpCode'), splice(0, 'BACKTRACK')])), splice(0, concat([splice(0, 'Target'), splice(0, self.lookup('b'))])), splice(1, self.lookup('x')), splice(0, concat([splice(0, 'OpCode'), splice(0, 'LIST_APPEND')])), splice(0, concat([splice(0, 'OpCode'), splice(0, 'COMMIT')])), splice(0, concat([splice(0, 'Target'), splice(0, self.lookup('a'))])), splice(0, concat([splice(0, 'Label'), splice(0, self.lookup('b'))])), splice(0, concat([splice(0, 'OpCode'), splice(0, 'LIST_END')]))]))),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        182,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: self.bind('a', self.lookup('label')(), lambda: self.bind('b', self.lookup('label')(), lambda: concat([splice(0, concat([splice(0, 'OpCode'), splice(0, 'BACKTRACK')])), splice(0, concat([splice(0, 'Target'), splice(0, self.lookup('b'))])), splice(1, self.lookup('x')), splice(0, concat([splice(0, 'OpCode'), splice(0, 'COMMIT')])), splice(0, concat([splice(0, 'Target'), splice(0, self.lookup('a'))])), splice(0, concat([splice(0, 'Label'), splice(0, self.lookup('a'))])), splice(0, concat([splice(0, 'OpCode'), splice(0, 'FAIL')])), splice(0, concat([splice(0, 'Value'), splice(0, 'no match')])), splice(0, concat([splice(0, 'Label'), splice(0, self.lookup('b'))]))]))),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        ACTION,
-        lambda self: concat([splice(0, concat([splice(0, 'OpCode'), splice(0, 'MATCH_CALL_RULE')]))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: concat([splice(0, concat([splice(0, 'OpCode'), splice(0, 'CALL')])), splice(0, concat([splice(0, 'Target'), splice(0, self.lookup('x'))]))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: concat([splice(0, concat([splice(0, 'OpCode'), splice(0, 'MATCH')])), splice(0, self.lookup('x'))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        182,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: concat([splice(0, concat([splice(0, 'OpCode'), splice(0, 'PUSH_STREAM')])), splice(1, self.lookup('x')), splice(0, concat([splice(0, 'OpCode'), splice(0, 'POP_STREAM')]))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: concat([splice(0, concat([splice(0, 'OpCode'), splice(0, 'ACTION')])), splice(0, concat([splice(0, 'Action'), splice(0, self.lookup('x'))]))]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        LIST_START,
-        BACKTRACK,
-        166,
-        CALL,
-        182,
-        LIST_APPEND,
-        COMMIT,
-        159,
-        LIST_END,
-        BIND,
-        'xs',
-        BACKTRACK,
-        178,
-        MATCH,
-        'any',
-        lambda x: True,
-        COMMIT,
-        176,
-        FAIL,
-        'no match',
-        ACTION,
-        lambda self: self.lookup('xs'),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        PUSH_STREAM,
-        MATCH_CALL_RULE,
-        BIND,
-        'x',
-        POP_STREAM,
-        ACTION,
-        lambda self: self.lookup('x'),
-        POP_SCOPE,
-        RETURN
-    ]
-class Assembler(Grammar):
-    rules = {
-        'Grammar': 0,
-        'Rule': 21,
-        'Label': 31,
-        'Target': 41,
-        'Patch': 51,
-        'OpCode': 66,
-        'Value': 76,
-        'Eq': 86,
-        'Range': 96,
-        'Any': 111,
-        'Action': 116,
-        'Set': 125,
-        'String': 143,
-        'List': 153,
-        'ListItem': 162,
-        'Format': 176,
-        'Indent': 185,
-        'Call': 194,
-        'Lookup': 207,
-        'asts': 217,
-        'astList': 242,
-        'ast': 258
-    }
-    code = [
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        LIST_START,
-        BACKTRACK,
-        14,
-        CALL,
-        258,
-        LIST_APPEND,
-        COMMIT,
-        7,
-        LIST_END,
-        BIND,
-        'ys',
-        ACTION,
-        lambda self: self.bind('rules', self.lookup('list')(), lambda: self.bind('code', self.lookup('list')(), lambda: self.bind('labels', self.lookup('dict')(), lambda: self.bind('patches', self.lookup('list')(), lambda: self.bind('', self.lookup('ys'), lambda: self.bind('', self.lookup('run')('asts', self.lookup('patches')), lambda: join(['class ', self.lookup('x'), '(Grammar):\n', indent(join(['rules = {\n', indent(join([self.lookup('join')(self.lookup('rules'), ',\n')]), self.lookup('indentprefix')), '\n}\n', 'code = [\n', indent(join([self.lookup('join')(self.lookup('code'), ',\n')]), self.lookup('indentprefix')), '\n]\n']), self.lookup('indentprefix'))]))))))),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: self.bind('', self.lookup('add')(self.lookup('rules'), join([self.lookup('repr')(self.lookup('x')), ': ', self.lookup('len')(self.lookup('code'))])), lambda: self.lookup('set')(self.lookup('labels'), self.lookup('x'), self.lookup('len')(self.lookup('code')))),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: self.lookup('set')(self.lookup('labels'), self.lookup('x'), self.lookup('len')(self.lookup('code'))),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: self.bind('', self.lookup('add')(self.lookup('patches'), concat([splice(0, 'Patch'), splice(0, self.lookup('len')(self.lookup('code'))), splice(0, self.lookup('x'))])), lambda: self.lookup('add')(self.lookup('code'), 'placeholder')),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'y',
-        ACTION,
-        lambda self: self.lookup('set')(self.lookup('code'), self.lookup('x'), self.lookup('get')(self.lookup('labels'), self.lookup('y'))),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: self.lookup('add')(self.lookup('code'), self.lookup('x')),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: self.lookup('add')(self.lookup('code'), self.lookup('repr')(self.lookup('x'))),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: self.bind('', self.lookup('add')(self.lookup('code'), self.lookup('repr')(self.lookup('x'))), lambda: self.lookup('add')(self.lookup('code'), join(['lambda x: x == ', self.lookup('repr')(self.lookup('x'))]))),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'y',
-        ACTION,
-        lambda self: self.bind('', self.lookup('add')(self.lookup('code'), self.lookup('repr')(join(['range ', self.lookup('repr')(self.lookup('x')), '-', self.lookup('repr')(self.lookup('y'))]))), lambda: self.lookup('add')(self.lookup('code'), join(['lambda x: ', self.lookup('repr')(self.lookup('x')), ' <= x <= ', self.lookup('repr')(self.lookup('y'))]))),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        ACTION,
-        lambda self: self.bind('', self.lookup('add')(self.lookup('code'), self.lookup('repr')('any')), lambda: self.lookup('add')(self.lookup('code'), 'lambda x: True')),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        258,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: self.lookup('add')(self.lookup('code'), join(['lambda self: ', self.lookup('x')])),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        CALL,
-        258,
-        BIND,
-        'y',
-        CALL,
-        258,
-        BIND,
-        'z',
-        ACTION,
-        lambda self: join(['self.bind(', self.lookup('repr')(self.lookup('x')), ', ', self.lookup('y'), ', lambda: ', self.lookup('z'), ')']),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: self.lookup('repr')(self.lookup('x')),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        242,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: join(['concat([', self.lookup('x'), '])']),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        CALL,
-        258,
-        BIND,
-        'y',
-        ACTION,
-        lambda self: join(['splice(', self.lookup('repr')(self.lookup('x')), ', ', self.lookup('y'), ')']),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        242,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: join(['join([', self.lookup('x'), '])']),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        258,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: join(['indent(', self.lookup('x'), ', ', "self.lookup('indentprefix'))"]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        CALL,
-        258,
-        BIND,
-        'x',
-        CALL,
-        242,
-        BIND,
-        'y',
-        ACTION,
-        lambda self: join([self.lookup('x'), '(', self.lookup('y'), ')']),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        MATCH,
-        'any',
-        lambda x: True,
-        BIND,
-        'x',
-        ACTION,
-        lambda self: join(['self.lookup(', self.lookup('repr')(self.lookup('x')), ')']),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        LIST_START,
-        BACKTRACK,
-        226,
-        CALL,
-        258,
-        LIST_APPEND,
-        COMMIT,
-        219,
-        LIST_END,
-        BIND,
-        'xs',
-        BACKTRACK,
-        238,
-        MATCH,
-        'any',
-        lambda x: True,
-        COMMIT,
-        236,
-        FAIL,
-        'no match',
-        ACTION,
-        lambda self: join([self.lookup('xs')]),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        LIST_START,
-        BACKTRACK,
-        251,
-        CALL,
-        258,
-        LIST_APPEND,
-        COMMIT,
-        244,
-        LIST_END,
-        BIND,
-        'xs',
-        ACTION,
-        lambda self: self.lookup('join')(self.lookup('xs'), ', '),
-        POP_SCOPE,
-        RETURN,
-        PUSH_SCOPE,
-        PUSH_STREAM,
-        MATCH_CALL_RULE,
-        BIND,
-        'x',
-        POP_STREAM,
-        ACTION,
-        lambda self: self.lookup('x'),
-        POP_SCOPE,
-        RETURN
-    ]
+
+rules = {}
+rules['Parser.file'] = Or([
+    Scope(And([
+        Bind('xs', Star(Or([
+            Scope(And([
+                MatchRule('Parser.space'),
+                MatchRule('Parser.grammar')]))]))),
+        MatchRule('Parser.space'),
+        Not(MatchObject(lambda x: True, 'True')),
+        Action(lambda self: self.lookup('xs'))]))])
+rules['Parser.grammar'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('Parser.name')),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '{', "x == '{'")]),
+        Bind('ys', Star(MatchRule('Parser.rule'))),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '}', "x == '}'")]),
+        Action(lambda self: concat([
+            splice(0, 'Grammar'),
+            splice(0, self.lookup('x')),
+            splice(1, self.lookup('ys'))]))]))])
+rules['Parser.rule'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('Parser.name')),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '=', "x == '='")]),
+        Bind('y', MatchRule('Parser.choice')),
+        Action(lambda self: concat([
+            splice(0, 'Rule'),
+            splice(0, self.lookup('x')),
+            splice(0, self.lookup('y'))]))]))])
+rules['Parser.choice'] = Or([
+    Scope(And([
+        Or([
+            Or([
+                Scope(And([
+                    MatchRule('Parser.space'),
+                    And([
+                        MatchObject(lambda x: x == '|', "x == '|'")])]))]),
+            And([
+            ])]),
+        Bind('x', MatchRule('Parser.sequence')),
+        Bind('xs', Star(Or([
+            Scope(And([
+                MatchRule('Parser.space'),
+                And([
+                    MatchObject(lambda x: x == '|', "x == '|'")]),
+                MatchRule('Parser.sequence')]))]))),
+        Action(lambda self: concat([
+            splice(0, 'Or'),
+            splice(0, self.lookup('x')),
+            splice(1, self.lookup('xs'))]))]))])
+rules['Parser.sequence'] = Or([
+    Scope(And([
+        Bind('xs', Star(MatchRule('Parser.expr'))),
+        Bind('ys', MatchRule('Parser.maybeAction')),
+        Action(lambda self: concat([
+            splice(0, 'Scope'),
+            splice(0, concat([
+                splice(0, 'And'),
+                splice(1, self.lookup('xs')),
+                splice(1, self.lookup('ys'))]))]))]))])
+rules['Parser.expr'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('Parser.expr1')),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == ':', "x == ':'")]),
+        Bind('y', MatchRule('Parser.name')),
+        Action(lambda self: concat([
+            splice(0, 'Bind'),
+            splice(0, self.lookup('y')),
+            splice(0, self.lookup('x'))]))])),
+    Scope(And([
+        MatchRule('Parser.expr1')]))])
+rules['Parser.expr1'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('Parser.expr2')),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '*', "x == '*'")]),
+        Action(lambda self: concat([
+            splice(0, 'Star'),
+            splice(0, self.lookup('x'))]))])),
+    Scope(And([
+        Bind('x', MatchRule('Parser.expr2')),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '?', "x == '?'")]),
+        Action(lambda self: concat([
+            splice(0, 'Or'),
+            splice(0, self.lookup('x')),
+            splice(0, concat([
+                splice(0, 'And')]))]))])),
+    Scope(And([
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '!', "x == '!'")]),
+        Bind('x', MatchRule('Parser.expr2')),
+        Action(lambda self: concat([
+            splice(0, 'Not'),
+            splice(0, self.lookup('x'))]))])),
+    Scope(And([
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '%', "x == '%'")]),
+        Action(lambda self: concat([
+            splice(0, 'MatchCallRule')]))])),
+    Scope(And([
+        MatchRule('Parser.expr2')]))])
+rules['Parser.expr2'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('Parser.name')),
+        Not(Or([
+            Scope(And([
+                MatchRule('Parser.space'),
+                And([
+                    MatchObject(lambda x: x == '=', "x == '='")])]))])),
+        Action(lambda self: concat([
+            splice(0, 'MatchRule'),
+            splice(0, self.lookup('x'))]))])),
+    Scope(And([
+        MatchRule('Parser.space'),
+        Bind('x', MatchRule('Parser.char')),
+        And([
+            MatchObject(lambda x: x == '-', "x == '-'")]),
+        Bind('y', MatchRule('Parser.char')),
+        Action(lambda self: concat([
+            splice(0, 'MatchObject'),
+            splice(0, concat([
+                splice(0, 'Range'),
+                splice(0, self.lookup('x')),
+                splice(0, self.lookup('y'))]))]))])),
+    Scope(And([
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == "'", 'x == "\'"')]),
+        Bind('xs', Star(Or([
+            Scope(And([
+                Not(And([
+                    MatchObject(lambda x: x == "'", 'x == "\'"')])),
+                MatchRule('Parser.matchChar')]))]))),
+        And([
+            MatchObject(lambda x: x == "'", 'x == "\'"')]),
+        Action(lambda self: concat([
+            splice(0, 'And'),
+            splice(1, self.lookup('xs'))]))])),
+    Scope(And([
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '.', "x == '.'")]),
+        Action(lambda self: concat([
+            splice(0, 'MatchObject'),
+            splice(0, concat([
+                splice(0, 'Any')]))]))])),
+    Scope(And([
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '(', "x == '('")]),
+        Bind('x', MatchRule('Parser.choice')),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == ')', "x == ')'")]),
+        Action(lambda self: self.lookup('x'))])),
+    Scope(And([
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '[', "x == '['")]),
+        Bind('xs', Star(MatchRule('Parser.expr'))),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == ']', "x == ']'")]),
+        Action(lambda self: concat([
+            splice(0, 'MatchList'),
+            splice(0, concat([
+                splice(0, 'And'),
+                splice(1, self.lookup('xs'))]))]))]))])
+rules['Parser.matchChar'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('Parser.innerChar')),
+        Action(lambda self: concat([
+            splice(0, 'MatchObject'),
+            splice(0, concat([
+                splice(0, 'Eq'),
+                splice(0, self.lookup('x'))]))]))]))])
+rules['Parser.maybeAction'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('Parser.actionExpr')),
+        Action(lambda self: concat([
+            splice(0, concat([
+                splice(0, 'Action'),
+                splice(0, self.lookup('x'))]))]))])),
+    Scope(And([
+        Action(lambda self: concat([
+        ]))]))])
+rules['Parser.actionExpr'] = Or([
+    Scope(And([
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '-', "x == '-'"),
+            MatchObject(lambda x: x == '>', "x == '>'")]),
+        Bind('x', MatchRule('Parser.hostExpr')),
+        Bind('y', Or([
+            Scope(And([
+                MatchRule('Parser.space'),
+                And([
+                    MatchObject(lambda x: x == ':', "x == ':'")]),
+                MatchRule('Parser.name')])),
+            Scope(And([
+                Action(lambda self: '')]))])),
+        Bind('z', MatchRule('Parser.actionExpr')),
+        Action(lambda self: concat([
+            splice(0, 'Set'),
+            splice(0, self.lookup('y')),
+            splice(0, self.lookup('x')),
+            splice(0, self.lookup('z'))]))])),
+    Scope(And([
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '-', "x == '-'"),
+            MatchObject(lambda x: x == '>', "x == '>'")]),
+        Bind('x', MatchRule('Parser.hostExpr')),
+        Action(lambda self: self.lookup('x'))]))])
+rules['Parser.hostExpr'] = Or([
+    Scope(And([
+        MatchRule('Parser.space'),
+        Bind('x', MatchRule('Parser.string')),
+        Action(lambda self: concat([
+            splice(0, 'String'),
+            splice(0, self.lookup('x'))]))])),
+    Scope(And([
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '[', "x == '['")]),
+        Bind('xs', Star(MatchRule('Parser.hostListItem'))),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == ']', "x == ']'")]),
+        Action(lambda self: concat([
+            splice(0, 'List'),
+            splice(1, self.lookup('xs'))]))])),
+    Scope(And([
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '{', "x == '{'")]),
+        Bind('xs', Star(MatchRule('Parser.formatExpr'))),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '}', "x == '}'")]),
+        Action(lambda self: concat([
+            splice(0, 'Format'),
+            splice(1, self.lookup('xs'))]))])),
+    Scope(And([
+        Bind('x', MatchRule('Parser.var')),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '(', "x == '('")]),
+        Bind('ys', Star(MatchRule('Parser.hostExpr'))),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == ')', "x == ')'")]),
+        Action(lambda self: concat([
+            splice(0, 'Call'),
+            splice(0, self.lookup('x')),
+            splice(1, self.lookup('ys'))]))])),
+    Scope(And([
+        Bind('x', MatchRule('Parser.var'))]))])
+rules['Parser.hostListItem'] = Or([
+    Scope(And([
+        MatchRule('Parser.space'),
+        Bind('ys', Star(And([
+            MatchObject(lambda x: x == '~', "x == '~'")]))),
+        Bind('x', MatchRule('Parser.hostExpr')),
+        Action(lambda self: concat([
+            splice(0, 'ListItem'),
+            splice(0, self.lookup('len')(
+                self.lookup('ys'))),
+            splice(0, self.lookup('x'))]))]))])
+rules['Parser.formatExpr'] = Or([
+    Scope(And([
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '>', "x == '>'")]),
+        Bind('xs', Star(MatchRule('Parser.formatExpr'))),
+        MatchRule('Parser.space'),
+        And([
+            MatchObject(lambda x: x == '<', "x == '<'")]),
+        Action(lambda self: concat([
+            splice(0, 'Indent'),
+            splice(0, concat([
+                splice(0, 'Format'),
+                splice(1, self.lookup('xs'))]))]))])),
+    Scope(And([
+        MatchRule('Parser.hostExpr')]))])
+rules['Parser.var'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('Parser.name')),
+        Not(Or([
+            Scope(And([
+                MatchRule('Parser.space'),
+                And([
+                    MatchObject(lambda x: x == '=', "x == '='")])]))])),
+        Action(lambda self: concat([
+            splice(0, 'Lookup'),
+            splice(0, self.lookup('x'))]))]))])
+rules['Parser.string'] = Or([
+    Scope(And([
+        And([
+            MatchObject(lambda x: x == '"', 'x == \'"\'')]),
+        Bind('xs', Star(Or([
+            Scope(And([
+                Not(And([
+                    MatchObject(lambda x: x == '"', 'x == \'"\'')])),
+                MatchRule('Parser.innerChar')]))]))),
+        And([
+            MatchObject(lambda x: x == '"', 'x == \'"\'')]),
+        Action(lambda self: join([
+            self.lookup('xs')]))]))])
+rules['Parser.char'] = Or([
+    Scope(And([
+        And([
+            MatchObject(lambda x: x == "'", 'x == "\'"')]),
+        Not(And([
+            MatchObject(lambda x: x == "'", 'x == "\'"')])),
+        Bind('x', MatchRule('Parser.innerChar')),
+        And([
+            MatchObject(lambda x: x == "'", 'x == "\'"')]),
+        Action(lambda self: self.lookup('x'))]))])
+rules['Parser.innerChar'] = Or([
+    Scope(And([
+        And([
+            MatchObject(lambda x: x == '\\', "x == '\\\\'")]),
+        MatchRule('Parser.escape')])),
+    Scope(And([
+        MatchObject(lambda x: True, 'True')]))])
+rules['Parser.escape'] = Or([
+    Scope(And([
+        And([
+            MatchObject(lambda x: x == '\\', "x == '\\\\'")]),
+        Action(lambda self: '\\')])),
+    Scope(And([
+        And([
+            MatchObject(lambda x: x == "'", 'x == "\'"')]),
+        Action(lambda self: "'")])),
+    Scope(And([
+        And([
+            MatchObject(lambda x: x == '"', 'x == \'"\'')]),
+        Action(lambda self: '"')])),
+    Scope(And([
+        And([
+            MatchObject(lambda x: x == 'n', "x == 'n'")]),
+        Action(lambda self: '\n')]))])
+rules['Parser.name'] = Or([
+    Scope(And([
+        MatchRule('Parser.space'),
+        Bind('x', MatchRule('Parser.nameStart')),
+        Bind('xs', Star(MatchRule('Parser.nameChar'))),
+        Action(lambda self: join([
+            self.lookup('x'),
+            self.lookup('xs')]))]))])
+rules['Parser.nameStart'] = Or([
+    Scope(And([
+        MatchObject(lambda x: 'a' <= x <= 'z', "'a' <= x <= 'z'")])),
+    Scope(And([
+        MatchObject(lambda x: 'A' <= x <= 'Z', "'A' <= x <= 'Z'")]))])
+rules['Parser.nameChar'] = Or([
+    Scope(And([
+        MatchObject(lambda x: 'a' <= x <= 'z', "'a' <= x <= 'z'")])),
+    Scope(And([
+        MatchObject(lambda x: 'A' <= x <= 'Z', "'A' <= x <= 'Z'")])),
+    Scope(And([
+        MatchObject(lambda x: '0' <= x <= '9', "'0' <= x <= '9'")]))])
+rules['Parser.space'] = Or([
+    Scope(And([
+        Star(Or([
+            Scope(And([
+                And([
+                    MatchObject(lambda x: x == ' ', "x == ' '")])])),
+            Scope(And([
+                And([
+                    MatchObject(lambda x: x == '\n', "x == '\\n'")])]))]))]))])
+rules['CodeGenerator.Grammar'] = Or([
+    Scope(And([
+        Bind('x', MatchObject(lambda x: True, 'True')),
+        Bind('ys', Star(MatchRule('CodeGenerator.ast'))),
+        Action(lambda self: self.bind('namespace', self.lookup('x'), lambda: join([
+            self.lookup('ys')])))]))])
+rules['CodeGenerator.Rule'] = Or([
+    Scope(And([
+        Bind('x', MatchObject(lambda x: True, 'True')),
+        Bind('y', MatchRule('CodeGenerator.ast')),
+        Action(lambda self: join([
+            "rules['",
+            self.lookup('namespace'),
+            '.',
+            self.lookup('x'),
+            "'] = ",
+            self.lookup('y'),
+            '\n']))]))])
+rules['CodeGenerator.Or'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.astList')),
+        Action(lambda self: join([
+            'Or([',
+            self.lookup('x'),
+            '])']))]))])
+rules['CodeGenerator.Scope'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.ast')),
+        Action(lambda self: join([
+            'Scope(',
+            self.lookup('x'),
+            ')']))]))])
+rules['CodeGenerator.And'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.astList')),
+        Action(lambda self: join([
+            'And([',
+            self.lookup('x'),
+            '])']))]))])
+rules['CodeGenerator.Bind'] = Or([
+    Scope(And([
+        Bind('x', MatchObject(lambda x: True, 'True')),
+        Bind('y', MatchRule('CodeGenerator.ast')),
+        Action(lambda self: join([
+            'Bind(',
+            self.lookup('repr')(
+                self.lookup('x')),
+            ', ',
+            self.lookup('y'),
+            ')']))]))])
+rules['CodeGenerator.Star'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.ast')),
+        Action(lambda self: join([
+            'Star(',
+            self.lookup('x'),
+            ')']))]))])
+rules['CodeGenerator.Not'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.ast')),
+        Action(lambda self: join([
+            'Not(',
+            self.lookup('x'),
+            ')']))]))])
+rules['CodeGenerator.MatchList'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.ast')),
+        Action(lambda self: join([
+            'MatchList(',
+            self.lookup('x'),
+            ')']))]))])
+rules['CodeGenerator.MatchCallRule'] = Or([
+    Scope(And([
+        Action(lambda self: join([
+            "MatchCallRule('",
+            self.lookup('namespace'),
+            "')"]))]))])
+rules['CodeGenerator.MatchObject'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.ast')),
+        Action(lambda self: join([
+            'MatchObject(lambda x: ',
+            self.lookup('x'),
+            ', ',
+            self.lookup('repr')(
+                self.lookup('x')),
+            ')']))]))])
+rules['CodeGenerator.MatchRule'] = Or([
+    Scope(And([
+        Bind('x', MatchObject(lambda x: True, 'True')),
+        Action(lambda self: join([
+            "MatchRule('",
+            self.lookup('namespace'),
+            '.',
+            self.lookup('x'),
+            "')"]))]))])
+rules['CodeGenerator.Eq'] = Or([
+    Scope(And([
+        Bind('x', MatchObject(lambda x: True, 'True')),
+        Action(lambda self: join([
+            'x == ',
+            self.lookup('repr')(
+                self.lookup('x'))]))]))])
+rules['CodeGenerator.Any'] = Or([
+    Scope(And([
+        Action(lambda self: join([
+            'True']))]))])
+rules['CodeGenerator.Range'] = Or([
+    Scope(And([
+        Bind('x', MatchObject(lambda x: True, 'True')),
+        Bind('y', MatchObject(lambda x: True, 'True')),
+        Action(lambda self: join([
+            self.lookup('repr')(
+                self.lookup('x')),
+            ' <= x <= ',
+            self.lookup('repr')(
+                self.lookup('y'))]))]))])
+rules['CodeGenerator.Action'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.ast')),
+        Action(lambda self: join([
+            'Action(lambda self: ',
+            self.lookup('x'),
+            ')']))]))])
+rules['CodeGenerator.Set'] = Or([
+    Scope(And([
+        Bind('x', MatchObject(lambda x: True, 'True')),
+        Bind('y', MatchRule('CodeGenerator.ast')),
+        Bind('z', MatchRule('CodeGenerator.ast')),
+        Action(lambda self: join([
+            'self.bind(',
+            self.lookup('repr')(
+                self.lookup('x')),
+            ', ',
+            self.lookup('y'),
+            ', lambda: ',
+            self.lookup('z'),
+            ')']))]))])
+rules['CodeGenerator.String'] = Or([
+    Scope(And([
+        Bind('x', MatchObject(lambda x: True, 'True')),
+        Action(lambda self: self.lookup('repr')(
+            self.lookup('x')))]))])
+rules['CodeGenerator.List'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.astList')),
+        Action(lambda self: join([
+            'concat([',
+            self.lookup('x'),
+            '])']))]))])
+rules['CodeGenerator.ListItem'] = Or([
+    Scope(And([
+        Bind('x', MatchObject(lambda x: True, 'True')),
+        Bind('y', MatchRule('CodeGenerator.ast')),
+        Action(lambda self: join([
+            'splice(',
+            self.lookup('repr')(
+                self.lookup('x')),
+            ', ',
+            self.lookup('y'),
+            ')']))]))])
+rules['CodeGenerator.Format'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.astList')),
+        Action(lambda self: join([
+            'join([',
+            self.lookup('x'),
+            '])']))]))])
+rules['CodeGenerator.Indent'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.ast')),
+        Action(lambda self: join([
+            'indent(',
+            self.lookup('x'),
+            ', ',
+            "self.lookup('indentprefix'))"]))]))])
+rules['CodeGenerator.Call'] = Or([
+    Scope(And([
+        Bind('x', MatchRule('CodeGenerator.ast')),
+        Bind('y', MatchRule('CodeGenerator.astList')),
+        Action(lambda self: join([
+            self.lookup('x'),
+            '(',
+            self.lookup('y'),
+            ')']))]))])
+rules['CodeGenerator.Lookup'] = Or([
+    Scope(And([
+        Bind('x', MatchObject(lambda x: True, 'True')),
+        Action(lambda self: join([
+            'self.lookup(',
+            self.lookup('repr')(
+                self.lookup('x')),
+            ')']))]))])
+rules['CodeGenerator.astList'] = Or([
+    Scope(And([
+        Bind('xs', Star(MatchRule('CodeGenerator.ast'))),
+        Action(lambda self: join([
+            '\n',
+            indent(join([
+                self.lookup('join')(
+                    self.lookup('xs'),
+                    ',\n')]), self.lookup('indentprefix'))]))]))])
+rules['CodeGenerator.asts'] = Or([
+    Scope(And([
+        Bind('xs', Star(MatchRule('CodeGenerator.ast'))),
+        Not(MatchObject(lambda x: True, 'True')),
+        Action(lambda self: join([
+            self.lookup('xs')]))]))])
+rules['CodeGenerator.ast'] = Or([
+    Scope(And([
+        MatchList(And([
+            Bind('x', MatchCallRule('CodeGenerator'))]))]))])
 if __name__ == "__main__":
     import sys
     def read(path):
@@ -1649,7 +873,7 @@ if __name__ == "__main__":
             ))
         elif command == "--compile":
             sys.stdout.write(compile_chain(
-                [(Parser, "file"), (CodeGenerator, "asts"), (Assembler, "asts")],
+                ["Parser.file", "CodeGenerator.asts"],
                 read(args.pop(0))
             ))
         else:
