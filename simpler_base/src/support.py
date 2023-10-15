@@ -9,7 +9,7 @@ class Or:
             state = stream.save()
             try:
                 return matcher.run(stream)
-            except ParseError:
+            except MatchError:
                 stream.restore(state)
         stream.error("no or match")
 
@@ -30,7 +30,7 @@ class Not:
             state = stream.save()
             try:
                 self.matcher.run(stream)
-            except ParseError:
+            except MatchError:
                 return stream.action(lambda self: None)
             finally:
                 stream.restore(state)
@@ -86,7 +86,7 @@ class Star:
             state = stream.save()
             try:
                 results.append(self.matcher.run(stream))
-            except ParseError:
+            except MatchError:
                 stream.restore(state)
                 break
         return stream.action(lambda self: [x.eval(self.runtime) for x in results])
@@ -186,9 +186,9 @@ class Stream:
     def error(self, name):
         if not self.skip_record and not self.latest_error or self.index > self.latest_error[2]:
             self.latest_error = (name, self.items, self.index)
-        raise ParseError(*self.latest_error)
+        raise MatchError(*self.latest_error)
 
-class ParseError(Exception):
+class MatchError(Exception):
     def __init__(self, name, items, index):
         Exception.__init__(self, name)
         self.items = items
@@ -228,7 +228,7 @@ def compile_chain(grammars, source):
     for rule in grammars:
         try:
             source = rules[rule].run(Stream(source)).eval(Runtime())
-        except ParseError as e:
+        except MatchError as e:
             marker = "<ERROR POSITION>"
             if os.isatty(sys.stderr.fileno()):
                 marker = f"\033[0;31m{marker}\033[0m"
