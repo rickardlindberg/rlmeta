@@ -59,9 +59,9 @@ class Stream:
         self.scopes.pop(-1)
         return result
 
-    def bind(self, name, value):
-        self.scopes[-1][name] = value
-        return value
+    def bind(self, name, semantic_action):
+        self.scopes[-1][name] = semantic_action
+        return semantic_action
 
     def match_list(self, matcher):
         if self.index < len(self.items):
