@@ -525,33 +525,30 @@ class Matcher_Parser_81:
         return stream.with_scope(Matcher_Parser_80())
 class Matcher_Parser_82:
     def run(self, stream):
-        return rules['Parser.expr1'].run(stream)
+        return rules['Parser.space'].run(stream)
 class Matcher_Parser_83:
     def run(self, stream):
-        return stream.operator_and([
-            Matcher_Parser_82()
-        ])
+        return stream.match(lambda item: item == '[', "'['")
 class Matcher_Parser_84:
     def run(self, stream):
-        return stream.with_scope(Matcher_Parser_83())
+        return stream.operator_and([
+            Matcher_Parser_83()
+        ])
 class Matcher_Parser_85:
     def run(self, stream):
-        return stream.operator_or([
-            Matcher_Parser_81(),
-            Matcher_Parser_84()
-        ])
+        return rules['Parser.expr'].run(stream)
 class Matcher_Parser_86:
     def run(self, stream):
-        return rules['Parser.expr2'].run(stream)
+        return stream.operator_star(Matcher_Parser_85())
 class Matcher_Parser_87:
     def run(self, stream):
-        return stream.bind('x', Matcher_Parser_86().run(stream))
+        return stream.bind('xs', Matcher_Parser_86().run(stream))
 class Matcher_Parser_88:
     def run(self, stream):
         return rules['Parser.space'].run(stream)
 class Matcher_Parser_89:
     def run(self, stream):
-        return stream.match(lambda item: item == '*', "'*'")
+        return stream.match(lambda item: item == ']', "']'")
 class Matcher_Parser_90:
     def run(self, stream):
         return stream.operator_and([
@@ -560,12 +557,17 @@ class Matcher_Parser_90:
 class Matcher_Parser_91:
     def run(self, stream):
         return stream.action(lambda self: self.lookup('concat')([
-            self.lookup('splice')(0, 'Star'),
-            self.lookup('splice')(0, self.lookup('x'))
+            self.lookup('splice')(0, 'MatchList'),
+            self.lookup('splice')(0, self.lookup('concat')([
+                self.lookup('splice')(0, 'And'),
+                self.lookup('splice')(1, self.lookup('xs'))
+            ]))
         ]))
 class Matcher_Parser_92:
     def run(self, stream):
         return stream.operator_and([
+            Matcher_Parser_82(),
+            Matcher_Parser_84(),
             Matcher_Parser_87(),
             Matcher_Parser_88(),
             Matcher_Parser_90(),
@@ -576,22 +578,74 @@ class Matcher_Parser_93:
         return stream.with_scope(Matcher_Parser_92())
 class Matcher_Parser_94:
     def run(self, stream):
-        return rules['Parser.expr2'].run(stream)
+        return rules['Parser.expr1'].run(stream)
 class Matcher_Parser_95:
     def run(self, stream):
-        return stream.bind('x', Matcher_Parser_94().run(stream))
+        return stream.operator_and([
+            Matcher_Parser_94()
+        ])
 class Matcher_Parser_96:
     def run(self, stream):
-        return rules['Parser.space'].run(stream)
+        return stream.with_scope(Matcher_Parser_95())
 class Matcher_Parser_97:
     def run(self, stream):
-        return stream.match(lambda item: item == '?', "'?'")
+        return stream.operator_or([
+            Matcher_Parser_81(),
+            Matcher_Parser_93(),
+            Matcher_Parser_96()
+        ])
 class Matcher_Parser_98:
     def run(self, stream):
-        return stream.operator_and([
-            Matcher_Parser_97()
-        ])
+        return rules['Parser.expr2'].run(stream)
 class Matcher_Parser_99:
+    def run(self, stream):
+        return stream.bind('x', Matcher_Parser_98().run(stream))
+class Matcher_Parser_100:
+    def run(self, stream):
+        return rules['Parser.space'].run(stream)
+class Matcher_Parser_101:
+    def run(self, stream):
+        return stream.match(lambda item: item == '*', "'*'")
+class Matcher_Parser_102:
+    def run(self, stream):
+        return stream.operator_and([
+            Matcher_Parser_101()
+        ])
+class Matcher_Parser_103:
+    def run(self, stream):
+        return stream.action(lambda self: self.lookup('concat')([
+            self.lookup('splice')(0, 'Star'),
+            self.lookup('splice')(0, self.lookup('x'))
+        ]))
+class Matcher_Parser_104:
+    def run(self, stream):
+        return stream.operator_and([
+            Matcher_Parser_99(),
+            Matcher_Parser_100(),
+            Matcher_Parser_102(),
+            Matcher_Parser_103()
+        ])
+class Matcher_Parser_105:
+    def run(self, stream):
+        return stream.with_scope(Matcher_Parser_104())
+class Matcher_Parser_106:
+    def run(self, stream):
+        return rules['Parser.expr2'].run(stream)
+class Matcher_Parser_107:
+    def run(self, stream):
+        return stream.bind('x', Matcher_Parser_106().run(stream))
+class Matcher_Parser_108:
+    def run(self, stream):
+        return rules['Parser.space'].run(stream)
+class Matcher_Parser_109:
+    def run(self, stream):
+        return stream.match(lambda item: item == '?', "'?'")
+class Matcher_Parser_110:
+    def run(self, stream):
+        return stream.operator_and([
+            Matcher_Parser_109()
+        ])
+class Matcher_Parser_111:
     def run(self, stream):
         return stream.action(lambda self: self.lookup('concat')([
             self.lookup('splice')(0, 'Or'),
@@ -600,103 +654,57 @@ class Matcher_Parser_99:
                 self.lookup('splice')(0, 'And')
             ]))
         ]))
-class Matcher_Parser_100:
+class Matcher_Parser_112:
     def run(self, stream):
         return stream.operator_and([
-            Matcher_Parser_95(),
-            Matcher_Parser_96(),
-            Matcher_Parser_98(),
-            Matcher_Parser_99()
+            Matcher_Parser_107(),
+            Matcher_Parser_108(),
+            Matcher_Parser_110(),
+            Matcher_Parser_111()
         ])
-class Matcher_Parser_101:
+class Matcher_Parser_113:
     def run(self, stream):
-        return stream.with_scope(Matcher_Parser_100())
-class Matcher_Parser_102:
+        return stream.with_scope(Matcher_Parser_112())
+class Matcher_Parser_114:
     def run(self, stream):
         return rules['Parser.space'].run(stream)
-class Matcher_Parser_103:
+class Matcher_Parser_115:
     def run(self, stream):
         return stream.match(lambda item: item == '!', "'!'")
-class Matcher_Parser_104:
+class Matcher_Parser_116:
     def run(self, stream):
         return stream.operator_and([
-            Matcher_Parser_103()
+            Matcher_Parser_115()
         ])
-class Matcher_Parser_105:
+class Matcher_Parser_117:
     def run(self, stream):
         return rules['Parser.expr2'].run(stream)
-class Matcher_Parser_106:
+class Matcher_Parser_118:
     def run(self, stream):
-        return stream.bind('x', Matcher_Parser_105().run(stream))
-class Matcher_Parser_107:
+        return stream.bind('x', Matcher_Parser_117().run(stream))
+class Matcher_Parser_119:
     def run(self, stream):
         return stream.action(lambda self: self.lookup('concat')([
             self.lookup('splice')(0, 'Not'),
             self.lookup('splice')(0, self.lookup('x'))
         ]))
-class Matcher_Parser_108:
-    def run(self, stream):
-        return stream.operator_and([
-            Matcher_Parser_102(),
-            Matcher_Parser_104(),
-            Matcher_Parser_106(),
-            Matcher_Parser_107()
-        ])
-class Matcher_Parser_109:
-    def run(self, stream):
-        return stream.with_scope(Matcher_Parser_108())
-class Matcher_Parser_110:
-    def run(self, stream):
-        return rules['Parser.space'].run(stream)
-class Matcher_Parser_111:
-    def run(self, stream):
-        return stream.match(lambda item: item == '%', "'%'")
-class Matcher_Parser_112:
-    def run(self, stream):
-        return stream.operator_and([
-            Matcher_Parser_111()
-        ])
-class Matcher_Parser_113:
-    def run(self, stream):
-        return stream.action(lambda self: self.lookup('concat')([
-            self.lookup('splice')(0, 'MatchCallRule')
-        ]))
-class Matcher_Parser_114:
-    def run(self, stream):
-        return stream.operator_and([
-            Matcher_Parser_110(),
-            Matcher_Parser_112(),
-            Matcher_Parser_113()
-        ])
-class Matcher_Parser_115:
-    def run(self, stream):
-        return stream.with_scope(Matcher_Parser_114())
-class Matcher_Parser_116:
-    def run(self, stream):
-        return rules['Parser.space'].run(stream)
-class Matcher_Parser_117:
-    def run(self, stream):
-        return stream.match(lambda item: item == '[', "'['")
-class Matcher_Parser_118:
-    def run(self, stream):
-        return stream.operator_and([
-            Matcher_Parser_117()
-        ])
-class Matcher_Parser_119:
-    def run(self, stream):
-        return rules['Parser.expr'].run(stream)
 class Matcher_Parser_120:
     def run(self, stream):
-        return stream.operator_star(Matcher_Parser_119())
+        return stream.operator_and([
+            Matcher_Parser_114(),
+            Matcher_Parser_116(),
+            Matcher_Parser_118(),
+            Matcher_Parser_119()
+        ])
 class Matcher_Parser_121:
     def run(self, stream):
-        return stream.bind('xs', Matcher_Parser_120().run(stream))
+        return stream.with_scope(Matcher_Parser_120())
 class Matcher_Parser_122:
     def run(self, stream):
         return rules['Parser.space'].run(stream)
 class Matcher_Parser_123:
     def run(self, stream):
-        return stream.match(lambda item: item == ']', "']'")
+        return stream.match(lambda item: item == '%', "'%'")
 class Matcher_Parser_124:
     def run(self, stream):
         return stream.operator_and([
@@ -705,18 +713,11 @@ class Matcher_Parser_124:
 class Matcher_Parser_125:
     def run(self, stream):
         return stream.action(lambda self: self.lookup('concat')([
-            self.lookup('splice')(0, 'MatchList'),
-            self.lookup('splice')(0, self.lookup('concat')([
-                self.lookup('splice')(0, 'And'),
-                self.lookup('splice')(1, self.lookup('xs'))
-            ]))
+            self.lookup('splice')(0, 'MatchCallRule')
         ]))
 class Matcher_Parser_126:
     def run(self, stream):
         return stream.operator_and([
-            Matcher_Parser_116(),
-            Matcher_Parser_118(),
-            Matcher_Parser_121(),
             Matcher_Parser_122(),
             Matcher_Parser_124(),
             Matcher_Parser_125()
@@ -738,10 +739,9 @@ class Matcher_Parser_130:
 class Matcher_Parser_131:
     def run(self, stream):
         return stream.operator_or([
-            Matcher_Parser_93(),
-            Matcher_Parser_101(),
-            Matcher_Parser_109(),
-            Matcher_Parser_115(),
+            Matcher_Parser_105(),
+            Matcher_Parser_113(),
+            Matcher_Parser_121(),
             Matcher_Parser_127(),
             Matcher_Parser_130()
         ])
@@ -1912,7 +1912,7 @@ rules['Parser.namespace'] = Matcher_Parser_28()
 rules['Parser.rule'] = Matcher_Parser_39()
 rules['Parser.choice'] = Matcher_Parser_62()
 rules['Parser.sequence'] = Matcher_Parser_71()
-rules['Parser.expr'] = Matcher_Parser_85()
+rules['Parser.expr'] = Matcher_Parser_97()
 rules['Parser.expr1'] = Matcher_Parser_131()
 rules['Parser.expr2'] = Matcher_Parser_188()
 rules['Parser.matchChar'] = Matcher_Parser_194()

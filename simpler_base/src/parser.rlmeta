@@ -12,13 +12,13 @@ Parser {
     | expr*:xs maybeAction:ys                 -> ["Scope" ["And" ~xs ~ys]]
   expr =
     | expr1:x space ':' name:y                -> ["Bind" y x]
+    | space '[' expr*:xs space ']'            -> ["MatchList" ["And" ~xs]]
     | expr1
   expr1 =
     | expr2:x space '*'                       -> ["Star" x]
     | expr2:x space '?'                       -> ["Or" x ["And"]]
     | space '!' expr2:x                       -> ["Not" x]
     | space '%'                               -> ["MatchCallRule"]
-    | space '[' expr*:xs space ']'            -> ["MatchList" ["And" ~xs]]
     | expr2
   expr2 =
     | name:x !(space '=')                     -> ["MatchRule" x]
