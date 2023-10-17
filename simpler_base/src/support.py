@@ -1,39 +1,3 @@
-def operator_or(stream, matchers):
-    for matcher in matchers:
-        state = stream.save()
-        try:
-            return matcher.run(stream)
-        except MatchError:
-            stream.restore(state)
-    stream.error("no or match")
-
-def operator_and(stream, matchers):
-    result = stream.action(lambda self: None)
-    for matcher in matchers:
-        result = matcher.run(stream)
-    return result
-
-def operator_star(stream, matcher):
-    results = []
-    while True:
-        state = stream.save()
-        try:
-            results.append(matcher.run(stream))
-        except MatchError:
-            stream.restore(state)
-            break
-    return stream.action(lambda self: [x.eval(self.runtime) for x in results])
-
-def operator_not(stream, matcher):
-    state = stream.save()
-    try:
-        matcher.run(stream)
-    except MatchError:
-        return stream.action(lambda self: None)
-    finally:
-        stream.restore(state)
-    stream.error("not matched")
-
 class RuntimeAction:
 
     def __init__(self, scope, fn):
@@ -61,6 +25,42 @@ class Stream:
         self.scopes = []
         self.index = 0
         self.latest_error = None
+
+    def operator_or(self, matchers):
+        for matcher in matchers:
+            state = self.save()
+            try:
+                return matcher.run(self)
+            except MatchError:
+                self.restore(state)
+        self.error("no or match")
+
+    def operator_and(self, matchers):
+        result = self.action(lambda self: None)
+        for matcher in matchers:
+            result = matcher.run(self)
+        return result
+
+    def operator_star(self, matcher):
+        results = []
+        while True:
+            state = self.save()
+            try:
+                results.append(matcher.run(self))
+            except MatchError:
+                self.restore(state)
+                break
+        return self.action(lambda self: [x.eval(self.runtime) for x in results])
+
+    def operator_not(self, matcher):
+        state = self.save()
+        try:
+            matcher.run(self)
+        except MatchError:
+            return self.action(lambda self: None)
+        finally:
+            self.restore(state)
+        self.error("not matched")
 
     def action(self, fn):
         return RuntimeAction(self.scopes[-1], fn)
