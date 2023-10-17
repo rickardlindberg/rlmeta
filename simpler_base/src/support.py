@@ -18,7 +18,7 @@ class Stream:
         self.error("no or match")
 
     def operator_and(self, matchers):
-        result = self.action(lambda self: None)
+        result = self.action()
         for matcher in matchers:
             result = matcher.run(self)
         return result
@@ -31,20 +31,19 @@ class Stream:
                 results.append(matcher.run(self))
             except MatchError:
                 self.index = backtrack_index
-                break
-        return self.action(lambda self: [x.eval(self.runtime) for x in results])
+                return self.action(lambda self: [x.eval(self.runtime) for x in results])
 
     def operator_not(self, matcher):
         backtrack_index = self.index
         try:
             matcher.run(self)
         except MatchError:
-            return self.action(lambda self: None)
+            return self.action()
         finally:
             self.index = backtrack_index
         self.error("not matched")
 
-    def action(self, fn):
+    def action(self, fn=lambda self: None):
         return SemanticAction(self.scope, fn)
 
     def with_scope(self, matcher):
