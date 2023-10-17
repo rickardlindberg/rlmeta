@@ -61,7 +61,4 @@ modifications to it.
 
 [ ] Rename ast to tree?
 
-[ ] Lists can be repeated and xs refers to last match?
-    echo 'G{x=[.:xs]*}' | python rlmeta.py
-
 [ ] Lookup concat/splice/join/indent?

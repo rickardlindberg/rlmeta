@@ -18,6 +18,7 @@ Parser {
     | expr2:x space '?'                       -> ["Or" x ["And"]]
     | space '!' expr2:x                       -> ["Not" x]
     | space '%'                               -> ["MatchCallRule"]
+    | space '[' expr*:xs space ']'            -> ["MatchList" ["And" ~xs]]
     | expr2
   expr2 =
     | name:x !(space '=')                     -> ["MatchRule" x]
@@ -25,7 +26,6 @@ Parser {
     | space '\'' (!'\'' matchChar)*:xs '\''   -> ["And" ~xs]
     | space '.'                               -> ["MatchObject" ["Any"]]
     | space '(' choice:x space ')'            -> x
-    | space '[' expr*:xs space ']'            -> ["MatchList" ["And" ~xs]]
   matchChar =
     | innerChar:x                             -> ["MatchObject" ["Eq" x]]
   maybeAction =
