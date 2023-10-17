@@ -45,7 +45,7 @@ class Stream:
         self.error("not matched")
 
     def action(self, fn):
-        return RuntimeAction(self.scopes[-1], fn)
+        return SemanticAction(self.scopes[-1], fn)
 
     def save(self):
         return (self.items, [dict(x) for x in self.scopes], self.index)
@@ -105,7 +105,7 @@ class MatchError(Exception):
         self.items = items
         self.index = index
 
-class RuntimeAction:
+class SemanticAction:
 
     def __init__(self, scope, fn):
         self.scope = scope
