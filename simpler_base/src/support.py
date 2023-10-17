@@ -1,3 +1,5 @@
+rules = {}
+
 class RuntimeAction:
 
     def __init__(self, scope, fn):
@@ -180,5 +182,3 @@ def compile_chain(grammars, source):
                 runtime.indent(stream_string)
             ))
     return source
-
-rules = {}
