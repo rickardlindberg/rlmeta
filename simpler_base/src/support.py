@@ -127,8 +127,8 @@ class SemanticAction:
 
 class Runtime:
 
-    def __init__(self, extra={}):
-        self.vars = dict({"len": len, "repr": repr}, **extra)
+    def __init__(self, extra={"len": len, "repr": repr}):
+        self.vars = extra
 
     def bind(self, name, value):
         return Runtime(dict(self.vars, **{name: value}))
