@@ -4,17 +4,17 @@ class Stream:
 
     def __init__(self, items):
         self.items = items
-        self.scopes = []
         self.index = 0
         self.latest_error = None
+        self.scope = None
 
     def operator_or(self, matchers):
         for matcher in matchers:
-            state = self.save()
+            backtrack_index = self.index
             try:
                 return matcher.run(self)
             except MatchError:
-                self.restore(state)
+                self.index = backtrack_index
         self.error("no or match")
 
     def operator_and(self, matchers):
@@ -26,41 +26,37 @@ class Stream:
     def operator_star(self, matcher):
         results = []
         while True:
-            state = self.save()
+            backtrack_index = self.index
             try:
                 results.append(matcher.run(self))
             except MatchError:
-                self.restore(state)
+                self.index = backtrack_index
                 break
         return self.action(lambda self: [x.eval(self.runtime) for x in results])
 
     def operator_not(self, matcher):
-        state = self.save()
+        backtrack_index = self.index
         try:
             matcher.run(self)
         except MatchError:
             return self.action(lambda self: None)
         finally:
-            self.restore(state)
+            self.index = backtrack_index
         self.error("not matched")
 
     def action(self, fn):
-        return SemanticAction(self.scopes[-1], fn)
-
-    def save(self):
-        return (self.items, [dict(x) for x in self.scopes], self.index)
-
-    def restore(self, values):
-        (self.items, self.scopes, self.index) = values
+        return SemanticAction(self.scope, fn)
 
     def with_scope(self, matcher):
-        self.scopes.append({})
-        result = matcher.run(self)
-        self.scopes.pop(-1)
-        return result
+        current_scope = self.scope
+        self.scope = {}
+        try:
+            return matcher.run(self)
+        finally:
+            self.scope = current_scope
 
     def bind(self, name, semantic_action):
-        self.scopes[-1][name] = semantic_action
+        self.scope[name] = semantic_action
         return semantic_action
 
     def match_list(self, matcher):
@@ -71,8 +67,7 @@ class Stream:
             try:
                 result = matcher.run(self)
             finally:
-                self.items, self.index = items, index
-                self.index += 1
+                self.items, self.index = items, index+1
             return result
         self.error("no list found")
 
@@ -87,10 +82,10 @@ class Stream:
 
     def match(self, fn, description):
         if self.index < len(self.items):
-            object = self.items[self.index]
-            if self.index < len(self.items) and fn(object):
+            item = self.items[self.index]
+            if fn(item):
                 self.index += 1
-                return self.action(lambda self: object)
+                return self.action(lambda self: item)
         self.error(f"expected {description}")
 
     def error(self, name):

@@ -1,21 +1,21 @@
-SUPPORT = 'rules = {}\n\nclass Stream:\n\n    def __init__(self, items):\n        self.items = items\n        self.scopes = []\n        self.index = 0\n        self.latest_error = None\n\n    def operator_or(self, matchers):\n        for matcher in matchers:\n            state = self.save()\n            try:\n                return matcher.run(self)\n            except MatchError:\n                self.restore(state)\n        self.error("no or match")\n\n    def operator_and(self, matchers):\n        result = self.action(lambda self: None)\n        for matcher in matchers:\n            result = matcher.run(self)\n        return result\n\n    def operator_star(self, matcher):\n        results = []\n        while True:\n            state = self.save()\n            try:\n                results.append(matcher.run(self))\n            except MatchError:\n                self.restore(state)\n                break\n        return self.action(lambda self: [x.eval(self.runtime) for x in results])\n\n    def operator_not(self, matcher):\n        state = self.save()\n        try:\n            matcher.run(self)\n        except MatchError:\n            return self.action(lambda self: None)\n        finally:\n            self.restore(state)\n        self.error("not matched")\n\n    def action(self, fn):\n        return SemanticAction(self.scopes[-1], fn)\n\n    def save(self):\n        return (self.items, [dict(x) for x in self.scopes], self.index)\n\n    def restore(self, values):\n        (self.items, self.scopes, self.index) = values\n\n    def with_scope(self, matcher):\n        self.scopes.append({})\n        result = matcher.run(self)\n        self.scopes.pop(-1)\n        return result\n\n    def bind(self, name, semantic_action):\n        self.scopes[-1][name] = semantic_action\n        return semantic_action\n\n    def match_list(self, matcher):\n        if self.index < len(self.items):\n            items, index = self.items, self.index\n            self.items = self.items[self.index]\n            self.index = 0\n            try:\n                result = matcher.run(self)\n            finally:\n                self.items, self.index = items, index\n                self.index += 1\n            return result\n        self.error("no list found")\n\n    def match_call_rule(self, namespace):\n        name = namespace + "." + self.items[self.index]\n        if name in rules:\n            rule = rules[name]\n            self.index += 1\n            return rule.run(self)\n        else:\n            self.error("unknown rule")\n\n    def match(self, fn, description):\n        if self.index < len(self.items):\n            object = self.items[self.index]\n            if self.index < len(self.items) and fn(object):\n                self.index += 1\n                return self.action(lambda self: object)\n        self.error(f"expected {description}")\n\n    def error(self, name):\n        if not self.latest_error or self.index > self.latest_error[2]:\n            self.latest_error = (name, self.items, self.index)\n        raise MatchError(*self.latest_error)\n\nclass MatchError(Exception):\n\n    def __init__(self, name, items, index):\n        Exception.__init__(self, name)\n        self.items = items\n        self.index = index\n\nclass SemanticAction:\n\n    def __init__(self, scope, fn):\n        self.scope = scope\n        self.fn = fn\n\n    def eval(self, runtime):\n        self.runtime = runtime\n        return self.fn(self)\n\n    def bind(self, name, value, continuation):\n        self.runtime = self.runtime.bind(name, value)\n        return continuation()\n\n    def lookup(self, name):\n        if name in self.scope:\n            return self.scope[name].eval(self.runtime)\n        else:\n            return self.runtime.lookup(name)\n\nclass Runtime:\n\n    def __init__(self, extra={"len": len, "repr": repr}):\n        self.vars = extra\n\n    def bind(self, name, value):\n        return Runtime(dict(self.vars, **{name: value}))\n\n    def lookup(self, name):\n        if name in self.vars:\n            return self.vars[name]\n        else:\n            return getattr(self, name)\n\n    def append(self, list, thing):\n        list.append(thing)\n\n    def join(self, items, delimiter=""):\n        return delimiter.join(\n            self.join(item, delimiter) if isinstance(item, list) else str(item)\n            for item in items\n        )\n\n    def indent(self, text, prefix="    "):\n        return "".join(prefix+line for line in text.splitlines(True))\n\n    def splice(self, depth, item):\n        if depth == 0:\n            return [item]\n        else:\n            return self.concat([self.splice(depth-1, subitem) for subitem in item])\n\n    def concat(self, lists):\n        return [x for xs in lists for x in xs]\n\ndef compile_chain(grammars, source):\n    import os\n    import sys\n    import pprint\n    runtime = Runtime()\n    for rule in grammars:\n        try:\n            source = rules[rule].run(Stream(source)).eval(runtime)\n        except MatchError as e:\n            marker = "<ERROR POSITION>"\n            if os.isatty(sys.stderr.fileno()):\n                marker = f"\\033[0;31m{marker}\\033[0m"\n            if isinstance(e.items, str):\n                stream_string = e.items[:e.index] + marker + e.items[e.index:]\n            else:\n                stream_string = pprint.pformat(e.items)\n            sys.exit("ERROR: {}\\nPOSITION: {}\\nSTREAM:\\n{}".format(\n                str(e),\n                e.index,\n                runtime.indent(stream_string)\n            ))\n    return source\n'
+SUPPORT = 'rules = {}\n\nclass Stream:\n\n    def __init__(self, items):\n        self.items = items\n        self.index = 0\n        self.latest_error = None\n        self.scope = None\n\n    def operator_or(self, matchers):\n        for matcher in matchers:\n            backtrack_index = self.index\n            try:\n                return matcher.run(self)\n            except MatchError:\n                self.index = backtrack_index\n        self.error("no or match")\n\n    def operator_and(self, matchers):\n        result = self.action(lambda self: None)\n        for matcher in matchers:\n            result = matcher.run(self)\n        return result\n\n    def operator_star(self, matcher):\n        results = []\n        while True:\n            backtrack_index = self.index\n            try:\n                results.append(matcher.run(self))\n            except MatchError:\n                self.index = backtrack_index\n                break\n        return self.action(lambda self: [x.eval(self.runtime) for x in results])\n\n    def operator_not(self, matcher):\n        backtrack_index = self.index\n        try:\n            matcher.run(self)\n        except MatchError:\n            return self.action(lambda self: None)\n        finally:\n            self.index = backtrack_index\n        self.error("not matched")\n\n    def action(self, fn):\n        return SemanticAction(self.scope, fn)\n\n    def with_scope(self, matcher):\n        current_scope = self.scope\n        self.scope = {}\n        try:\n            return matcher.run(self)\n        finally:\n            self.scope = current_scope\n\n    def bind(self, name, semantic_action):\n        self.scope[name] = semantic_action\n        return semantic_action\n\n    def match_list(self, matcher):\n        if self.index < len(self.items):\n            items, index = self.items, self.index\n            self.items = self.items[self.index]\n            self.index = 0\n            try:\n                result = matcher.run(self)\n            finally:\n                self.items, self.index = items, index+1\n            return result\n        self.error("no list found")\n\n    def match_call_rule(self, namespace):\n        name = namespace + "." + self.items[self.index]\n        if name in rules:\n            rule = rules[name]\n            self.index += 1\n            return rule.run(self)\n        else:\n            self.error("unknown rule")\n\n    def match(self, fn, description):\n        if self.index < len(self.items):\n            item = self.items[self.index]\n            if fn(item):\n                self.index += 1\n                return self.action(lambda self: item)\n        self.error(f"expected {description}")\n\n    def error(self, name):\n        if not self.latest_error or self.index > self.latest_error[2]:\n            self.latest_error = (name, self.items, self.index)\n        raise MatchError(*self.latest_error)\n\nclass MatchError(Exception):\n\n    def __init__(self, name, items, index):\n        Exception.__init__(self, name)\n        self.items = items\n        self.index = index\n\nclass SemanticAction:\n\n    def __init__(self, scope, fn):\n        self.scope = scope\n        self.fn = fn\n\n    def eval(self, runtime):\n        self.runtime = runtime\n        return self.fn(self)\n\n    def bind(self, name, value, continuation):\n        self.runtime = self.runtime.bind(name, value)\n        return continuation()\n\n    def lookup(self, name):\n        if name in self.scope:\n            return self.scope[name].eval(self.runtime)\n        else:\n            return self.runtime.lookup(name)\n\nclass Runtime:\n\n    def __init__(self, extra={"len": len, "repr": repr}):\n        self.vars = extra\n\n    def bind(self, name, value):\n        return Runtime(dict(self.vars, **{name: value}))\n\n    def lookup(self, name):\n        if name in self.vars:\n            return self.vars[name]\n        else:\n            return getattr(self, name)\n\n    def append(self, list, thing):\n        list.append(thing)\n\n    def join(self, items, delimiter=""):\n        return delimiter.join(\n            self.join(item, delimiter) if isinstance(item, list) else str(item)\n            for item in items\n        )\n\n    def indent(self, text, prefix="    "):\n        return "".join(prefix+line for line in text.splitlines(True))\n\n    def splice(self, depth, item):\n        if depth == 0:\n            return [item]\n        else:\n            return self.concat([self.splice(depth-1, subitem) for subitem in item])\n\n    def concat(self, lists):\n        return [x for xs in lists for x in xs]\n\ndef compile_chain(grammars, source):\n    import os\n    import sys\n    import pprint\n    runtime = Runtime()\n    for rule in grammars:\n        try:\n            source = rules[rule].run(Stream(source)).eval(runtime)\n        except MatchError as e:\n            marker = "<ERROR POSITION>"\n            if os.isatty(sys.stderr.fileno()):\n                marker = f"\\033[0;31m{marker}\\033[0m"\n            if isinstance(e.items, str):\n                stream_string = e.items[:e.index] + marker + e.items[e.index:]\n            else:\n                stream_string = pprint.pformat(e.items)\n            sys.exit("ERROR: {}\\nPOSITION: {}\\nSTREAM:\\n{}".format(\n                str(e),\n                e.index,\n                runtime.indent(stream_string)\n            ))\n    return source\n'
 rules = {}
 
 class Stream:
 
     def __init__(self, items):
         self.items = items
-        self.scopes = []
         self.index = 0
         self.latest_error = None
+        self.scope = None
 
     def operator_or(self, matchers):
         for matcher in matchers:
-            state = self.save()
+            backtrack_index = self.index
             try:
                 return matcher.run(self)
             except MatchError:
-                self.restore(state)
+                self.index = backtrack_index
         self.error("no or match")
 
     def operator_and(self, matchers):
@@ -27,41 +27,37 @@ class Stream:
     def operator_star(self, matcher):
         results = []
         while True:
-            state = self.save()
+            backtrack_index = self.index
             try:
                 results.append(matcher.run(self))
             except MatchError:
-                self.restore(state)
+                self.index = backtrack_index
                 break
         return self.action(lambda self: [x.eval(self.runtime) for x in results])
 
     def operator_not(self, matcher):
-        state = self.save()
+        backtrack_index = self.index
         try:
             matcher.run(self)
         except MatchError:
             return self.action(lambda self: None)
         finally:
-            self.restore(state)
+            self.index = backtrack_index
         self.error("not matched")
 
     def action(self, fn):
-        return SemanticAction(self.scopes[-1], fn)
-
-    def save(self):
-        return (self.items, [dict(x) for x in self.scopes], self.index)
-
-    def restore(self, values):
-        (self.items, self.scopes, self.index) = values
+        return SemanticAction(self.scope, fn)
 
     def with_scope(self, matcher):
-        self.scopes.append({})
-        result = matcher.run(self)
-        self.scopes.pop(-1)
-        return result
+        current_scope = self.scope
+        self.scope = {}
+        try:
+            return matcher.run(self)
+        finally:
+            self.scope = current_scope
 
     def bind(self, name, semantic_action):
-        self.scopes[-1][name] = semantic_action
+        self.scope[name] = semantic_action
         return semantic_action
 
     def match_list(self, matcher):
@@ -72,8 +68,7 @@ class Stream:
             try:
                 result = matcher.run(self)
             finally:
-                self.items, self.index = items, index
-                self.index += 1
+                self.items, self.index = items, index+1
             return result
         self.error("no list found")
 
@@ -88,10 +83,10 @@ class Stream:
 
     def match(self, fn, description):
         if self.index < len(self.items):
-            object = self.items[self.index]
-            if self.index < len(self.items) and fn(object):
+            item = self.items[self.index]
+            if fn(item):
                 self.index += 1
-                return self.action(lambda self: object)
+                return self.action(lambda self: item)
         self.error(f"expected {description}")
 
     def error(self, name):
