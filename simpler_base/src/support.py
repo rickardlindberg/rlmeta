@@ -1,25 +1,5 @@
 rules = {}
 
-class RuntimeAction:
-
-    def __init__(self, scope, fn):
-        self.scope = scope
-        self.fn = fn
-
-    def eval(self, runtime):
-        self.runtime = runtime
-        return self.fn(self)
-
-    def bind(self, name, value, continuation):
-        self.runtime = self.runtime.bind(name, value)
-        return continuation()
-
-    def lookup(self, name):
-        if name in self.scope:
-            return self.scope[name].eval(self.runtime)
-        else:
-            return self.runtime.lookup(name)
-
 class Stream:
 
     def __init__(self, items):
@@ -124,6 +104,26 @@ class MatchError(Exception):
         Exception.__init__(self, name)
         self.items = items
         self.index = index
+
+class RuntimeAction:
+
+    def __init__(self, scope, fn):
+        self.scope = scope
+        self.fn = fn
+
+    def eval(self, runtime):
+        self.runtime = runtime
+        return self.fn(self)
+
+    def bind(self, name, value, continuation):
+        self.runtime = self.runtime.bind(name, value)
+        return continuation()
+
+    def lookup(self, name):
+        if name in self.scope:
+            return self.scope[name].eval(self.runtime)
+        else:
+            return self.runtime.lookup(name)
 
 class Runtime:
 
