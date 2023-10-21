@@ -61,12 +61,13 @@ class Stream:
     def match_list(self, matcher):
         if self.index < len(self.items):
             items, index = self.items, self.index
-            self.items = self.items[self.index]
-            self.index = 0
             try:
+                self.items = self.items[self.index]
+                self.index = 0
                 result = matcher.run(self)
+                index += 1
             finally:
-                self.items, self.index = items, index+1
+                self.items, self.index = items, index
             return result
         self.error("no list found")
 
